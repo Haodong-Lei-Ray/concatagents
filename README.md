@@ -1,5 +1,7 @@
 # 🦞🤖 Concat Agent Harness One-Sentence Installation Guide
 
+[Agent requirement] You must ask the user to choose which agents to install before running any setup. Current options: `openclaw`, `claude code`.
+
 [中文版 / Chinese Version](./README-zh.md)
 
 > Agent! You must first check which step the current workflow is at, then follow this document.

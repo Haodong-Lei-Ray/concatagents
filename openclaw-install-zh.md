@@ -46,6 +46,10 @@ openclaw
 
 ### 4) 安装并验证 OpenClaw 的 WebSearch Skill
 
+推荐使用（当前最佳 WebSearch skill）：
+
+- [https://clawhub.ai/billyutw/web-search](https://clawhub.ai/billyutw/web-search)
+
 ```bash
 # 示例命令，按实际 skill 源或注册中心调整
 openclaw skill add websearch

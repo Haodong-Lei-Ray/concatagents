@@ -1,5 +1,7 @@
 # 🦞🤖 Concat Agent Harness 一句话安装指南
 
+[Agent 要求] 在执行任何安装前，你必须先让用户选择要安装哪些 agent。当前选项：`openclaw`、`claude code`。
+
 [English Version / 英文版](./README.md)
 
 > Agent！你必须先检查当前流程进行到哪一步，再按本文继续执行。

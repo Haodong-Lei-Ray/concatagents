@@ -46,6 +46,10 @@ Acceptance criteria:
 
 ### 4) Install and Verify OpenClaw WebSearch Skill
 
+Recommended (currently the best WebSearch skill):
+
+- [https://clawhub.ai/billyutw/web-search](https://clawhub.ai/billyutw/web-search)
+
 ```bash
 # Example only; adjust to your actual skill source/registry
 openclaw skill add websearch
