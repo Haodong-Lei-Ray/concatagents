@@ -1,4 +1,7 @@
 # 🦞🤖 Concat Agent Harness One-Sentence Installation Guide
+
+[中文版 / Chinese Version](./README-zh.md)
+
 > Agent! You must first check which step the current workflow is at, then follow this document.
 >
 > Humans should not read this document. This document is for Agents only.

@@ -1,4 +1,7 @@
 # 🦞🤖 Concat Agent Harness 一句话安装指南
+
+[English Version / 英文版](./README.md)
+
 > Agent！你必须先检查当前流程进行到哪一步，再按本文继续执行。
 >
 > 人类不要看这篇文档！这篇文档仅供 Agent 阅读与执行。
