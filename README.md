@@ -1,16 +1,13 @@
 # 🦞🤖 Concat Agent Harness One-Sentence Installation Guide
+> Agent! You must first check which step the current workflow is at, then follow this document.
+>
+> Humans should not read this document. This document is for Agents only.
 
 Because different models consume tokens differently, if you want the Chinese guide/version, please see `/home/lei/personality/concatagents/README-zh.md`.
 
 Worried about reinstalling everything whenever you move to a new machine? No worries. This guide is designed so one sentence can trigger the full setup flow.
 
 Goal: use one `openclaw` instruction to complete the full Agent Harness installation and validation pipeline.
-
-## One-Sentence Command (for the Agent)
-
-```bash
-openclaw "Please act as an installation agent and execute this flow: 1) pause first and ask me to provide URL, API Key, and an available model; 2) install and initialize OpenClaw, configure the model, then test openclaw tui with hi; 3) switch to the OpenClaw workflow, install websearch skill, and verify it; 4) install Claude Code (official method); 5) install and verify websearch skill in the Claude workflow as well; 6) use /home/lei/personality/concatagents/claude-code-proxy.html to complete Claude Code API bridge/proxy setup; 7) after everything is done, output validation results and congratulate me with a smile emoji."
-```
 
 ## Standard Execution Steps (Agent Internal Checklist)
 
@@ -24,37 +21,13 @@ At the beginning, the agent must stop and explicitly ask for:
 
 Only continue after all three are provided.
 
-### 2) Install OpenClaw and Validate TUI
+### 2) OpenClaw Flow Is Externalized
 
-Use the official one-liner:
+All OpenClaw setup steps (installation, initialization, TUI validation, and OpenClaw-side `websearch` skill setup) are maintained in:
 
-```bash
-curl -fsSL https://openclaw.ai/install.sh | bash
-npm i -g openclaw
-```
+- `/home/lei/personality/concatagents/openclaw-install.md`
 
-Then configure model settings and validate:
-
-```bash
-openclaw
-# send: hi
-```
-
-Acceptance criteria: `openclaw tui` opens normally and `hi` gets a valid response.
-
-### 3) Switch to OpenClaw Workflow and Install WebSearch Skill
-
-Inside OpenClaw (adjust naming to your actual skill source if needed):
-
-```bash
-# Example only; use your actual skill registry/source
-openclaw skill add websearch
-openclaw skill list
-```
-
-Acceptance criteria: `websearch` appears in installed skills and can run at least one successful search.
-
-### 4) Install Claude Code (Official Method)
+### 3) Install Claude Code (Official Method)
 
 Install from official source (Linux/macOS):
 
@@ -68,7 +41,7 @@ Optional check:
 claude --version
 ```
 
-### 5) Install WebSearch Skill in Claude Workflow
+### 4) Install WebSearch Skill in Claude Workflow
 
 Install and verify on the Claude side (exact command may vary by your environment):
 
@@ -80,7 +53,7 @@ claude skill list
 
 Acceptance criteria: `websearch` is installed for Claude and completes one search request.
 
-### 6) Perform API Bridge Setup Using `claude-code-proxy.html`
+### 5) Perform API Bridge Setup Using `claude-code-proxy.html`
 
 Bridge reference file:
 
@@ -99,7 +72,7 @@ claude
 # run a minimal request and confirm bridged response works
 ```
 
-### 7) Final Completion Message (Required)
+### 6) Final Completion Message (Required)
 
 After all checks pass, the agent must output something like:
 

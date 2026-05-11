@@ -1,14 +1,11 @@
 # 🦞🤖 Concat Agent Harness 一句话安装指南
+> Agent！你必须先检查当前流程进行到哪一步，再按本文继续执行。
+>
+> 人类不要看这篇文档！这篇文档仅供 Agent 阅读与执行。
 
 你是否还在犹豫换台机器又要重装agent的焦虑，别担心，我一句话这里有一句话就能安装完的一个流程。
 
 目标：在 `openclaw` 中用“一句话任务”自动完成 Agent Harness 全链路安装与验证。
-
-## 一句话总命令（交给 Agent 执行）
-
-```bash
-openclaw "请作为安装代理执行以下流程：1) 先暂停并提示我提供 URL、API Key、可用 model；2) 安装并初始化 OpenClaw，配置模型后用 hi 测试 openclaw tui；3) 切换到 openclaw 工作流，为其安装 websearch skill 并验证；4) 安装 Claude Code（按官方文档）；5) 在 Claude 工作流中也安装 websearch skill 并验证；6) 使用 /home/lei/personality/concatagents/claude-code-proxy.html 的桥接方案完成 Claude Code API 桥接；7) 全部完成后输出验证结果并恭喜我，带一个笑脸表情。"
-```
 
 ## 标准执行步骤（Agent 内部应遵循）
 
@@ -22,37 +19,13 @@ Agent 首次执行时必须停下来，明确提示用户准备：
 
 并在拿到这三项后再继续下一步。
 
-### 2) 安装 OpenClaw 并验证 TUI
+### 2) OpenClaw 流程统一看独立文件
 
-参考 OpenClaw 官方一键安装：
+OpenClaw 的安装、初始化、TUI 验证、以及 OpenClaw 侧 `websearch` skill 安装与验证，统一按下列文件执行：
 
-```bash
-curl -fsSL https://openclaw.ai/install.sh | bash
-npm i -g openclaw
-```
+- `/home/lei/personality/concatagents/openclaw-install-zh.md`
 
-完成后配置模型，然后验证：
-
-```bash
-openclaw
-# 在 TUI 中发送：hi
-```
-
-验收标准：`openclaw tui` 可正常进入，`hi` 有有效回复。
-
-### 3) 切换到 OpenClaw 工作流并安装 WebSearch skill
-
-在 OpenClaw 内执行（名称可按仓库实际 skill 名调整）：
-
-```bash
-# 示例：按实际可用 skill 仓库/市场安装
-openclaw skill add websearch
-openclaw skill list
-```
-
-验收标准：`websearch` skill 出现在已安装列表，且可被调用一次并返回结果。
-
-### 4) 安装 Claude Code（官方方式）
+### 3) 安装 Claude Code（官方方式）
 
 按 Claude Code 官方文档安装（Linux/macOS）：
 
@@ -66,7 +39,7 @@ curl -fsSL https://claude.ai/install.sh | bash
 claude --version
 ```
 
-### 5) 在 Claude 工作流中安装 WebSearch skill
+### 4) 在 Claude 工作流中安装 WebSearch skill
 
 在 Claude 侧完成安装并验证（命令按实际可用方式调整）：
 
@@ -78,7 +51,7 @@ claude skill list
 
 验收标准：Claude 侧 `websearch` 已安装，且能完成 1 次搜索调用。
 
-### 6) 使用 `claude-code-proxy.html` 执行桥接手术
+### 5) 使用 `claude-code-proxy.html` 执行桥接手术
 
 桥接说明文件：
 
@@ -97,7 +70,7 @@ claude
 # 发起一个最小请求，确认经桥接可正常返回
 ```
 
-### 7) 收尾提示（必须）
+### 6) 收尾提示（必须）
 
 所有步骤完成后，Agent 必须输出类似：
 
