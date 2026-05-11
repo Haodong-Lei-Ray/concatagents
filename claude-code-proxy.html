@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code 转接口手术详解 v2</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 2rem; line-height: 1.8; }
+  h1 { font-size: 2rem; color: #fff; margin-bottom: 1rem; border-bottom: 2px solid #333; padding-bottom: 0.5rem; }
+  h2 { font-size: 1.3rem; color: #7dd3fc; margin: 1.5rem 0 0.5rem; }
+  h3 { font-size: 1rem; color: #a5d6ff; margin: 1rem 0 0.5rem; }
+  p { margin-bottom: 0.8rem; color: #ccc; }
+  li { margin-bottom: 0.4rem; color: #ccc; }
+  .step { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1rem 0; }
+  .problem { background: #1c1c1c; border-left: 4px solid #f97316; padding: 1rem 1.2rem; margin: 1rem 0; border-radius: 0 6px 6px 0; }
+  .solution { background: #1c1c1c; border-left: 4px solid #22c55e; padding: 1rem 1.2rem; margin: 1rem 0; border-radius: 0 6px 6px 0; }
+  .file-block { background: #141414; border: 1px solid #2a2a2a; border-radius: 6px; padding: 1rem; margin: 0.6rem 0; font-family: "Cascadia Code", "Fira Code", "Consolas", monospace; font-size: 0.88rem; white-space: pre-wrap; overflow-x: auto; color: #a0d8a0; }
+  .file-block .filename { color: #93c5fd; font-weight: bold; display: block; margin-bottom: 0.5rem; }
+  .comment { color: #6b7280; }
+  .key { color: #f9a8d4; }
+  .val { color: #86efac; }
+  .err { color: #f87171; }
+  .arrow { color: #fcd34d; font-size: 1.2rem; }
+  .diagram { background: #141414; border: 1px solid #2a2a2a; border-radius: 8px; padding: 1.5rem; margin: 1rem 0; text-align: center; font-family: monospace; white-space: pre; font-size: 0.9rem; color: #94a3b8; }
+  .tip { background: #1c1c1c; border-left: 4px solid #eab308; padding: 0.8rem 1.2rem; margin: 0.8rem 0; border-radius: 0 6px 6px 0; font-size: 0.9rem; color: #fde68a; }
+  .summary { background: #1c1c1c; border: 1px solid #2a2a2a; border-radius: 8px; padding: 1rem 1.5rem; margin: 1rem 0; }
+  .summary li { color: #86efac; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; margin-right: 4px; }
+  .tag-problem { background: #7f1d1d; color: #fca5a5; }
+  .tag-solution { background: #14532d; color: #86efac; }
+  .tag-file { background: #1e3a5f; color: #93c5fd; }
+  .tag-cmd { background: #3b2a6a; color: #c4b5fd; }
+</style>
+</head>
+<body>
+
+<h1>🛠️ Claude Code 转接口手术详解</h1>
+
+<p style="color:#888;font-size:0.9rem;margin-bottom:2rem">目标：将 Claude Code 的请求从"直连 Anthropic 官方 API"改到"走我们自己的第三方代理 + 本地智能路由 shim"；shim 支持多上游，不同模型自动路由到不同后端。</p>
+
+<!-- ═══════════════════════════════════════ -->
+<h2>📋 背景问题</h2>
+
+<div class="problem">
+  <span class="tag tag-problem">PROBLEM</span>
+  <strong>Claude Code 有 5 个内置模型菜单项：</strong>
+  <ol style="margin-top:0.5rem">
+    <li><strong>1. Default</strong> → 请求 <code class="key">claude-opus-4-7-1m</code>（1M 上下文）</li>
+    <li><strong>2. Sonnet</strong> → 请求 <code class="key">claude-sonnet-4-6</code></li>
+    <li><strong>3. Sonnet (1M context)</strong> → 请求 <code class="key">claude-sonnet-4-6-1m</code></li>
+    <li><strong>4. Haiku</strong> → 请求 <code class="key">claude-haiku-4-5</code>（短名）</li>
+    <li><strong>5. Opus 4.6 (Custom)</strong> → 请求 <code class="key">claude-opus-4-6</code>（通过 ANTHROPIC_CUSTOM_MODEL_OPTION 配置）</li>
+  </ol>
+</div>
+
+<div class="problem">
+  <span class="tag tag-problem">PROBLEM</span>
+  <strong>第三方代理（35.220.164.252:3888）只支持这些模型：</strong>
+  <ul style="margin-top:0.5rem">
+    <li>✅ <code class="key">claude-opus-4-7</code>、<code class="key">claude-opus-4-6</code></li>
+    <li>✅ <code class="key">claude-sonnet-4-6</code></li>
+    <li>✅ <code class="key">claude-haiku-4-5-20251001</code>（<strong>没有</strong>短名版本）</li>
+    <li>❌ <code class="key">claude-opus-4-7-1m</code>（代理没有 1M SKU）</li>
+    <li>❌ <code class="key">claude-sonnet-4-6-1m</code></li>
+    <li>❌ <code class="key">claude-haiku-4-5</code>（短名，代理不认）</li>
+  </ul>
+  <p style="margin-top:0.5rem;color:#f87171">结果：菜单项 1、3、4 会报 <code class="err">model_not_found</code>，只有 2 和 5 能工作。</p>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<h2>💡 核心思路</h2>
+
+<p>Claude Code 是闭源的，我们没法改它的模型 id 逻辑。唯一的办法是：</p>
+<div class="solution">
+  <span class="tag tag-solution">SOLUTION</span>
+  <strong>在 Claude Code 和上游代理之间加一个本地 HTTP shim，按 model 前缀智能路由到不同后端（第三方代理 或 MiniMax API），并自动做格式转换。</strong>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<h2>🏗️ 整体架构</h2>
+
+<div class="diagram">
+                     ┌────────────────────────────────┐
+Claude Code ─HTTP──▶ │   127.0.0.1:3889  (本地 shim)  │
+                     └───────────────┬────────────────┘
+                                     │
+                    model 以 "minimax-" 开头？
+                         │
+             ┌───────────┴───────────┐
+             │ YES                   │ NO
+             ▼                       ▼
+   api.minimaxi.com        35.220.164.252:3888
+   /v1/chat/completions       (第三方代理)
+   (OpenAI 格式)                     │
+             │                       ▼
+             │                Anthropic / OpenAI
+             │                   官方 API
+             │
+   ┌─────────┴──────────┐
+   │  双向格式转换       │
+   │ Anthropic ↔ OpenAI │
+   └────────────────────┘
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<h2>📡 双上游路由逻辑</h2>
+
+<div class="step">
+  <p>shim 收到请求后，先解析 JSON body 里的 <code class="key">model</code> 字段，然后分两条路：</p>
+  <table style="width:100%;border-collapse:collapse;font-size:0.9rem;margin-top:0.8rem">
+    <tr style="border-bottom:1px solid #333">
+      <th style="text-align:left;padding:0.5rem;color:#888">条件</th>
+      <th style="text-align:left;padding:0.5rem;color:#888">上游</th>
+      <th style="text-align:left;padding:0.5rem;color:#888">格式转换</th>
+      <th style="text-align:left;padding:0.5rem;color:#888">所需环境变量</th>
+    </tr>
+    <tr style="border-bottom:1px solid #222">
+      <td style="padding:0.5rem">model 以 <code class="key">minimax-</code> 开头<br><small style="color:#666">且 MINIMAX_API_KEY 已设</small></td>
+      <td style="padding:0.5rem"><code class="val">api.minimaxi.com/v1</code></td>
+      <td style="padding:0.5rem">Anthropic → OpenAI → Anthropic（双向）</td>
+      <td style="padding:0.5rem"><code>MINIMAX_API_KEY</code><br><code>MINIMAX_BASE_URL</code>（可选，有默认值）</td>
+    </tr>
+    <tr>
+      <td style="padding:0.5rem">其他所有模型</td>
+      <td style="padding:0.5rem"><code class="val">35.220.164.252:3888</code></td>
+      <td style="padding:0.5rem">仅做 model alias 替换，请求直透</td>
+      <td style="padding:0.5rem"><code>CLAUDE_PROXY_UPSTREAM</code>（可选，有默认值）</td>
+    </tr>
+  </table>
+
+  <div class="tip" style="margin-top:1rem">
+    💡 <strong>MiniMax 格式转换细节：</strong>shim 把 Anthropic 格式（system + messages）转成 OpenAI Chat Completions 格式发给 MiniMax，收到响应后再转回 Anthropic 格式。多条 system 消息会合并为一条（MiniMax 限制）；支持 <code>&lt;think&gt;</code> 标签提取为 <code>thinking</code> 内容块；<code>max_tokens</code> 上限截断为 8192。
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<h2>🧬 手术第一步：写本地 shim</h2>
+
+<div class="step">
+  <span class="tag tag-file">FILE</span> <code>~/.local/bin/claude-model-proxy.js</code>
+
+  <div class="file-block"><span class="filename">~/.local/bin/claude-model-proxy.js</span><span class="comment">/**
+ * claude-model-proxy
+ * 本地 HTTP 代理，智能路由到不同上游：
+ * - minimax-* 模型 → MiniMax API（含 Anthropic↔OpenAI 格式转换）
+ * - 其他模型     → 第三方代理（仅做 model alias 替换）
+ */</span>
+
+const http = require("http");
+const https = require("https");
+const { URL } = require("url");
+
+<span class="comment">// 默认上游：第三方代理</span>
+const UPSTREAM = new URL(
+  process.env.CLAUDE_PROXY_UPSTREAM || "http://35.220.164.252:3888"
+);
+<span class="comment">// 监听端口</span>
+const LISTEN_PORT = Number(process.env.CLAUDE_PROXY_PORT || 3889);
+const LISTEN_BIND = process.env.CLAUDE_PROXY_BIND || "127.0.0.1";
+
+<span class="comment">// MiniMax 上游（需要设置 MINIMAX_API_KEY 才会启用）</span>
+const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY || "";
+const MINIMAX_BASE_URL = process.env.MINIMAX_BASE_URL || "https://api.minimaxi.com/v1";
+let MINIMAX_UPSTREAM = null;
+<span class="comment">// MINIMAX_API_KEY 未设置则禁用 MiniMax 路由</span>
+try { if (MINIMAX_API_KEY) MINIMAX_UPSTREAM = new URL(MINIMAX_BASE_URL); } catch (_) {}
+
+<span class="comment">// 判断是否路由到 MiniMax</span>
+function isMiniMaxModel(modelId) {
+  if (!modelId || !MINIMAX_UPSTREAM) return false;
+  return modelId.toLowerCase().startsWith("minimax-");
+}
+
+<span class="comment">// 模型别名表：Claude Code 发出的 id → 第三方代理实际支持的 id（对 MiniMax 模型无效）</span>
+const MODEL_ALIASES = {
+  <span class="key">"claude-opus-4-7-1m"</span>: <span class="val">"claude-opus-4-7"</span>,   <span class="comment">// 菜单1 → opus-4-7</span>
+  <span class="key">"claude-opus-4-6-1m"</span>: <span class="val">"claude-opus-4-6"</span>,   <span class="comment">// 菜单1（历史版）</span>
+  <span class="key">"claude-opus-4-5-1m"</span>: <span class="val">"claude-opus-4-5-20251101"</span>,
+  <span class="key">"claude-sonnet-4-6-1m"</span>: <span class="val">"claude-sonnet-4-6"</span>, <span class="comment">// 菜单3 → sonnet-4-6</span>
+  <span class="key">"claude-sonnet-4-5-1m"</span>: <span class="val">"claude-sonnet-4-5-20250929"</span>,
+  <span class="key">"claude-haiku-4-5"</span>: <span class="val">"claude-haiku-4-5-20251001"</span>, <span class="comment">// 菜单4 → 带日期完整 id</span>
+  <span class="key">"claude-opus-4-5"</span>: <span class="val">"claude-opus-4-5-20251101"</span>,
+  <span class="key">"claude-sonnet-4-5"</span>: <span class="val">"claude-sonnet-4-5-20250929"</span>,
+  <span class="key">"claude-sonnet-4"</span>: <span class="val">"claude-sonnet-4-20250514"</span>,
+  <span class="key">"claude-opus-4"</span>: <span class="val">"claude-opus-4-20250514"</span>,
+};
+
+<span class="comment">// ── 路由判断 ──────────────────────────────────────────────────────</span>
+function rewriteBody(buf, contentType) {
+  if (!buf || !buf.length) return { buf, from: null, to: null, isMiniMax: false };
+  if (!(contentType || "").toLowerCase().includes("application/json"))
+    return { buf, from: null, to: null, isMiniMax: false };
+  let obj;
+  try { obj = JSON.parse(buf.toString("utf8")); }
+  catch (_) { return { buf, from: null, to: null, isMiniMax: false }; }
+  if (!obj || typeof obj.model !== "string")
+    return { buf, from: null, to: null, isMiniMax: false };
+
+  <span class="comment">// MiniMax 路由：原样透传 body（forwardToMiniMax 负责格式转换）</span>
+  if (isMiniMaxModel(obj.model))
+    return { buf, from: obj.model, to: obj.model, isMiniMax: true, body: obj };
+
+  <span class="comment">// 默认路由：做 alias 替换后转发给第三方代理</span>
+  const mapped = MODEL_ALIASES[obj.model];
+  if (!mapped || mapped === obj.model) return { buf, from: null, to: null, isMiniMax: false };
+  const from = obj.model; obj.model = mapped;
+  console.error(`[alias] ${from} -> ${mapped}`);  <span class="comment">// 日志</span>
+  return { buf: Buffer.from(JSON.stringify(obj)), from, to: mapped, isMiniMax: false };
+}
+
+<span class="comment">// ── 转发请求（非 MiniMax）─────────────────────────────────────────</span>
+<span class="comment">// rw.isMiniMax === true 时由 forwardToMiniMax() 处理，此路径不执行</span>
+const lib = UPSTREAM.protocol === "https:" ? https : http;
+fwd = lib.request({ hostname: UPSTREAM.hostname, port: UPSTREAM.port,
+                     path: req.url, method: req.method, headers },
+  (upstream) => {
+    res.writeHead(upstream.statusCode || 502, upstream.headers);
+    upstream.pipe(res);
+  });
+fwd.end(rw.buf);  <span class="comment">// 发送改写后的请求（alias 已替换）</span>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<h2>🔄 手术第二步：Systemd 守护进程（含 MiniMax Key）</h2>
+
+<div class="step">
+  <span class="tag tag-file">FILE</span> <code>~/.config/systemd/user/claude-model-proxy.service</code>
+
+  <div class="file-block"><span class="filename">~/.config/systemd/user/claude-model-proxy.service</span>[Unit]
+Description=本地模型路由 shim（alias 替换 + MiniMax 双上游路由）
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=CLAUDE_PROXY_PORT=3889
+Environment=CLAUDE_PROXY_BIND=127.0.0.1
+Environment=CLAUDE_PROXY_UPSTREAM=http://35.220.164.252:3888
+<span class="comment"># 启用 MiniMax 路由：填入 API Key，留空则禁用</span>
+Environment=MINIMAX_API_KEY=your-minimax-key-here
+Environment=MINIMAX_BASE_URL=https://api.minimaxi.com/v1
+ExecStart=/home/lei/.nvm/versions/node/v22.22.0/bin/node \
+          /home/lei/.local/bin/claude-model-proxy.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+</div>
+
+<p style="margin-top:0.8rem"><span class="tag tag-cmd">CMD</span> 启用并启动服务：</p>
+<div class="file-block">systemctl --user daemon-reload
+systemctl --user enable --now claude-model-proxy.service</div>
+
+<p style="margin-top:0.8rem"><span class="tag tag-cmd">CMD</span> 查看状态：</p>
+<div class="file-block">systemctl --user status claude-model-proxy.service
+journalctl --user -u claude-model-proxy -f   <span class="comment"># 实时看日志</span></div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<h2>💉 手术第三步：修改 Claude Code 的环境变量</h2>
+
+<div class="step">
+  <span class="tag tag-file">FILE</span> <code>~/.bashrc</code>（第 180–220 行左右）
+
+  <div class="file-block"><span class="filename">~/.bashrc</span><span class="comment"># ---- Claude Code via 3rd-party proxy (Bedrock-backed) ----</span>
+<span class="comment"># Claude Code 请求先打到本地 shim，shim 再转发给上游</span>
+export <span class="key">ANTHROPIC_BASE_URL</span>='<span class="val">http://127.0.0.1:3889</span>'
+export <span class="key">ANTHROPIC_API_KEY</span>='sk-SL2...'
+
+<span class="comment"># 让 Claude Code 使用自己的内置默认（菜单1-4）
+# 不要手动指定 ANTHROPIC_MODEL，避免覆盖默认</span>
+unset ANTHROPIC_MODEL
+unset ANTHROPIC_SMALL_FAST_MODEL
+unset ANTHROPIC_DEFAULT_OPUS_MODEL
+unset ANTHROPIC_DEFAULT_SONNET_MODEL
+unset ANTHROPIC_DEFAULT_HAIKU_MODEL
+
+<span class="comment"># 菜单第 5 项：DeepSeek V4 Pro（通过第三方代理）
+# 注意：这个模型代理本身就有，不需要 shim 做别名</span>
+export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION</span>=<span class="val">"deepseek-v4-pro"</span>
+export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION_NAME</span>=<span class="val">"DeepSeek V4 Pro (Custom)"</span>
+export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION</span>=<span class="val">"通过第三方代理"</span>
+
+<span class="comment"># 禁用 Claude Code 的实验性 beta 特性（上游代理不支持）</span>
+export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1
+export DISABLE_PROMPT_CACHING=1
+export DISABLE_TELEMETRY=1
+export DISABLE_ERROR_REPORTING=1
+export DISABLE_AUTOUPDATER=1
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
+<span class="comment"># --bare 跳过 Claude Code 额外的初始化调用（hooks、后台预取等）</span>
+alias claude='command claude --bare'
+alias claude-full='command claude'</div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<h2>🧪 手术验证</h2>
+
+<div class="step">
+  <p>检查 shim 是否正常运行：</p>
+  <div class="file-block">$ ss -ltn | grep 3889
+LISTEN 0 511 127.0.0.1:3889 0.0.0.0:*  users:(("node",pid=3970232))</div>
+
+  <p style="margin-top:1rem">手动测试别名是否生效：</p>
+  <div class="file-block">$ curl -X POST "http://127.0.0.1:3889/v1/messages" \
+  -H "x-api-key: sk-..." \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{"model":"claude-opus-4-7-1m",...}'
+<span class="comment"># shim 日志输出：</span>
+[alias] claude-opus-4-7-1m -> claude-opus-4-7  (POST /v1/messages)</div>
+
+  <p style="margin-top:1rem">检查 Claude Code 进程的 env（确认 Base URL 是 shim）：</p>
+  <div class="file-block">$ tr '\0' '\n' &lt; /proc/&lt;pid&gt;/environ | grep ANTHROPIC
+ANTHROPIC_BASE_URL=http://127.0.0.1:3889  <span class="comment"># ← 应该是 shim 地址，不是上游代理</span>
+ANTHROPIC_API_KEY=sk-SL2...</div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<h2>📊 手术效果</h2>
+
+<div class="summary">
+  <table style="width:100%;border-collapse:collapse;font-size:0.9rem">
+    <tr style="border-bottom:1px solid #333">
+      <th style="text-align:left;padding:0.5rem;color:#888">菜单项</th>
+      <th style="text-align:left;padding:0.5rem;color:#888">Claude Code 请求的 id</th>
+      <th style="text-align:left;padding:0.5rem;color:#888">shim 改写成</th>
+      <th style="text-align:left;padding:0.5rem;color:#888">结果</th>
+    </tr>
+    <tr style="border-bottom:1px solid #222">
+      <td style="padding:0.5rem">1. Default</td>
+      <td style="padding:0.5rem"><code class="key">claude-opus-4-7-1m</code></td>
+      <td style="padding:0.5rem"><code class="val">claude-opus-4-7</code></td>
+      <td style="color:#22c55e;padding:0.5rem">✅ 工作</td>
+    </tr>
+    <tr style="border-bottom:1px solid #222">
+      <td style="padding:0.5rem">2. Sonnet</td>
+      <td style="padding:0.5rem"><code class="key">claude-sonnet-4-6</code></td>
+      <td style="padding:0.5rem"><code class="val">claude-sonnet-4-6</code></td>
+      <td style="color:#22c55e;padding:0.5rem">✅ 工作</td>
+    </tr>
+    <tr style="border-bottom:1px solid #222">
+      <td style="padding:0.5rem">3. Sonnet (1M)</td>
+      <td style="padding:0.5rem"><code class="key">claude-sonnet-4-6-1m</code></td>
+      <td style="padding:0.5rem"><code class="val">claude-sonnet-4-6</code></td>
+      <td style="color:#22c55e;padding:0.5rem">✅ 工作（实际是标准 200k）</td>
+    </tr>
+    <tr style="border-bottom:1px solid #222">
+      <td style="padding:0.5rem">4. Haiku</td>
+      <td style="padding:0.5rem"><code class="key">claude-haiku-4-5</code></td>
+      <td style="padding:0.5rem"><code class="val">claude-haiku-4-5-20251001</code></td>
+      <td style="color:#22c55e;padding:0.5rem">✅ 工作</td>
+    </tr>
+    <tr style="border-bottom:1px solid #222">
+      <td style="padding:0.5rem">5. DeepSeek V4 Pro</td>
+      <td style="padding:0.5rem"><code class="key">deepseek-v4-pro</code></td>
+      <td style="padding:0.5rem">无需改写（代理原生支持）</td>
+      <td style="color:#22c55e;padding:0.5rem">✅ 工作</td>
+    </tr>
+    <tr>
+      <td style="padding:0.5rem">自定义 MiniMax</td>
+      <td style="padding:0.5rem"><code class="key">minimax-*</code></td>
+      <td style="padding:0.5rem">路由到 api.minimaxi.com（格式双向转换）</td>
+      <td style="color:#22c55e;padding:0.5rem">✅ 工作（需设 MINIMAX_API_KEY）</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<h2>🔧 关键技巧总结</h2>
+
+<div class="step">
+  <ol>
+    <li><strong>改请求体，不改 URL</strong> — Claude Code 发的是 HTTP POST JSON，把 model 字段从 JSON body 里改掉，比改 HTTP Header 更可靠。</li>
+    <li><strong>只改认识的 id，未知 id 原样透传</strong> — <code>deepseek-v4-pro</code> 不在别名表里，shim 就直接透传到上游，上游有这个模型所以能正常工作。</li>
+    <li><strong>MiniMax 双向格式转换</strong> — MiniMax 不支持 Anthropic 格式，shim 在内存里做完整的 Anthropic→OpenAI 转换再发请求，收到后再转回，Claude Code 完全感知不到。</li>
+    <li><strong>MiniMax 只需 Key，无需改 Claude Code 配置</strong> — 在 systemd service 里设好 <code>MINIMAX_API_KEY</code>，shim 自动识别 <code>minimax-</code> 前缀并路由，对 Claude Code 透明。</li>
+    <li><strong>stdout → stderr 打日志</strong> — shim 里用 <code>console.error()</code> 写日志，这样不会干扰 HTTP 响应数据，同时可以通过 <code>journalctl</code> 实时看到每次改写。</li>
+    <li><strong>systemd 守护</strong> — 用 user systemd service 管理 shim，崩溃后 3 秒自动重启，开机自启，不用手动盯着。</li>
+    <li><strong>进程 env 是一次性的</strong> — <code>~/.bashrc</code> 改了之后，已启动的 Claude Code 进程不会自动更新，必须 <code>source ~/.bashrc</code> 或重启进程。</li>
+  </ol>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<h2>📁 相关文件路径</h2>
+
+<div class="step">
+  <ul>
+    <li><code>~/.local/bin/claude-model-proxy.js</code> — shim 脚本</li>
+    <li><code>~/.config/systemd/user/claude-model-proxy.service</code> — systemd 服务配置</li>
+    <li><code>~/.bashrc</code>（第 180–220 行）— Claude Code 环境变量</li>
+    <li><code>~/.openclaw/openclaw.json</code> — OpenClaw 模型配置（另一个系统）</li>
+  </ul>
+</div>
+
+</body>
+</html>
