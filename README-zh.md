@@ -1,6 +1,6 @@
-# 🦞🤖 Concat Agent Harness 一句话安装指南
+# 🦞🤖☤ Concat Agent Harness 一句话安装指南
 
-[Agent 要求] 在执行任何安装前，你必须先让用户选择要安装哪些 agent。当前选项：`openclaw`、`claude code`。
+[Agent 要求] 在执行任何安装前，你必须先让用户选择要安装哪些 agent。当前选项：`openclaw`、`claude code`、`hermes`。
 
 [English Version / 英文版](./README.md)
 
@@ -24,11 +24,11 @@ Agent 首次执行时必须停下来，明确提示用户准备：
 
 并在拿到这三项后再继续下一步。
 
-### 2) OpenClaw 流程统一看独立文件
+### 2) Hermes 安装流程
 
-OpenClaw 的安装、初始化、TUI 验证、以及 OpenClaw 侧 `websearch` skill 安装与验证，统一按下列文件执行：
+Hermes 的安装与使用流程，统一按下列文件执行：
 
-- `/home/lei/personality/concatagents/openclaw-install-zh.md`
+- `/home/lei/personality/concatagents/hermes-guide-zh.md`
 
 ### 3) 安装 Claude Code（官方方式）
 
@@ -37,6 +37,10 @@ OpenClaw 的安装、初始化、TUI 验证、以及 OpenClaw 侧 `websearch` sk
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash
 ```
+
+必须中断：安装完成后，Agent 需要暂停并提示用户手动运行一次 `claude` 完成初始化（例如登录/授权等首次引导）。
+
+用户完成初始化后，Agent 再继续后续流程。
 
 可选验证：
 
@@ -138,7 +142,7 @@ A：主要是稳定性和兼容性问题。
 
 - **Kimi**：在 `MiniMax 2.7` 场景下出现过直接崩溃。
 - **OpenCode**：在 `dpsk` 场景下出现过乱码输出。
-- **Hermes**：在 Windows 环境出现大量符号错误。
+- **OpenClaw**：在 Windows 环境运行存在问题。
 
 因此当前流程优先选择更稳定、可持续运行的方案，避免在关键链路中引入高风险组件。
 

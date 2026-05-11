@@ -1,6 +1,6 @@
-# 🦞🤖 Concat Agent Harness One-Sentence Installation Guide
+# 🦞🤖☤ Concat Agent Harness One-Sentence Installation Guide
 
-[Agent requirement] You must ask the user to choose which agents to install before running any setup. Current options: `openclaw`, `claude code`.
+[Agent requirement] You must ask the user to choose which agents to install before running any setup. Current options: `openclaw`, `claude code`, `hermes`.
 
 [中文版 / Chinese Version](./README-zh.md)
 
@@ -26,11 +26,11 @@ At the beginning, the agent must stop and explicitly ask for:
 
 Only continue after all three are provided.
 
-### 2) OpenClaw Flow Is Externalized
+### 2) Hermes Installation Flow
 
-All OpenClaw setup steps (installation, initialization, TUI validation, and OpenClaw-side `websearch` skill setup) are maintained in:
+For Hermes installation and usage setup, follow:
 
-- `/home/lei/personality/concatagents/openclaw-install.md`
+- `/home/lei/personality/concatagents/hermes-guide.md`
 
 ### 3) Install Claude Code (Official Method)
 
@@ -39,6 +39,10 @@ Install from official source (Linux/macOS):
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash
 ```
+
+Required pause: after installation, the agent must stop and ask the user to run `claude` once manually to complete first-time initialization (for example login/auth prompts).
+
+Only continue after the user confirms initialization is complete.
 
 Optional check:
 
@@ -140,7 +144,7 @@ A: Mainly due to stability and compatibility risks.
 
 - **Kimi**: observed direct crashes in `MiniMax 2.7` scenarios.
 - **OpenCode**: observed garbled output in `dpsk` scenarios.
-- **Hermes**: observed many symbol/encoding errors on Windows.
+- **OpenClaw**: observed runtime issues on Windows.
 
 So this setup prioritizes components with better operational stability on the critical path.
 
