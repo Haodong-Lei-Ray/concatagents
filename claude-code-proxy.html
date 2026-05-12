@@ -37,7 +37,7 @@
 
 <h1>🛠️ Claude Code 转接口手术详解</h1>
 
-<p style="color:#888;font-size:0.9rem;margin-bottom:2rem">目标：将 Claude Code 的请求从"直连 Anthropic 官方 API"改到"走我们自己的第三方代理 + 本地智能路由 shim"；shim 支持多上游，不同模型自动路由到不同后端。</p>
+<p style="color:#888;font-size:0.9rem;margin-bottom:2rem">目标：将 Claude Code 的请求从"直连 Anthropic 官方 API"改到"经<strong>第三方</strong>上游（聚合代理等）+ 本地智能路由 shim"；shim 支持多上游，不同模型自动路由到不同<strong>第三方</strong>后端。</p>
 
 <!-- ═══════════════════════════════════════ -->
 <h2>📋 背景问题</h2>
@@ -56,7 +56,7 @@
 
 <div class="problem">
   <span class="tag tag-problem">PROBLEM</span>
-  <strong>第三方代理（35.220.164.252:3888）只支持这些模型：</strong>
+  <strong>第三方聚合代理（35.220.164.252:3888）只支持这些模型：</strong>
   <ul style="margin-top:0.5rem">
     <li>✅ <code class="key">claude-opus-4-7</code>、<code class="key">claude-opus-4-6</code></li>
     <li>✅ <code class="key">claude-sonnet-4-6</code></li>
@@ -74,7 +74,7 @@
 <p>Claude Code 是闭源的，我们没法改它的模型 id 逻辑。唯一的办法是：</p>
 <div class="solution">
   <span class="tag tag-solution">SOLUTION</span>
-  <strong>在 Claude Code 和上游代理之间加一个本地 HTTP shim，按 model 前缀智能路由到不同后端（第三方代理 或 MiniMax API），并自动做格式转换。</strong>
+  <strong>在 Claude Code 和第三方上游之间加一个本地 HTTP shim：按 model 前缀把流量分到第三方聚合代理或第三方 MiniMax（Anthropic 兼容）等后端，并在需要时自动做格式转换。</strong>
 </div>
 
 <!-- ═══════════════════════════════════════ -->
@@ -90,21 +90,22 @@ Claude Code ─HTTP──▶ │   127.0.0.1:3889  (本地 shim)  │
              ┌───────────┴───────────┐
              │ YES                   │ NO
              ▼                       ▼
-   api.minimaxi.com        35.220.164.252:3888
-   /v1/chat/completions       (第三方代理)
-   (OpenAI 格式)                     │
+   第三方 MiniMax              第三方聚合代理
+   Anthropic 兼容 API          35.220.164.252:3888
+   （可配置区域/域名）                │
              │                       ▼
-             │                Anthropic / OpenAI
-             │                   官方 API
+             │                上游已收录的
+             │                Anthropic/OpenAI 等 id
              │
    ┌─────────┴──────────┐
-   │  双向格式转换       │
-   │ Anthropic ↔ OpenAI │
+   │ 第三方路径上        │
+   │ 可能需格式转换      │
+   │（以 shim 为准）     │
    └────────────────────┘
 </div>
 
 <!-- ═══════════════════════════════════════ -->
-<h2>📡 双上游路由逻辑</h2>
+<h2>📡 第三方双上游路由逻辑</h2>
 
 <div class="step">
   <p>shim 收到请求后，先解析 JSON body 里的 <code class="key">model</code> 字段，然后分两条路：</p>
@@ -116,21 +117,21 @@ Claude Code ─HTTP──▶ │   127.0.0.1:3889  (本地 shim)  │
       <th style="text-align:left;padding:0.5rem;color:#888">所需环境变量</th>
     </tr>
     <tr style="border-bottom:1px solid #222">
-      <td style="padding:0.5rem">model 以 <code class="key">minimax-</code> 开头<br><small style="color:#666">且 MINIMAX_API_KEY 已设</small></td>
-      <td style="padding:0.5rem"><code class="val">api.minimaxi.com/v1</code></td>
-      <td style="padding:0.5rem">Anthropic → OpenAI → Anthropic（双向）</td>
-      <td style="padding:0.5rem"><code>MINIMAX_API_KEY</code><br><code>MINIMAX_BASE_URL</code>（可选，有默认值）</td>
+      <td style="padding:0.5rem">model 以 <code class="key">minimax-</code> 开头<br><small style="color:#666">且 <code>MINIMAX_API_KEY</code> 已设</small></td>
+      <td style="padding:0.5rem"><strong>第三方 MiniMax</strong><br><code class="val">MINIMAX_ANTHROPIC_BASE_URL</code> 所指 Anthropic 兼容端</td>
+      <td style="padding:0.5rem">Anthropic ↔ 上游所需格式（双向，视实现而定）</td>
+      <td style="padding:0.5rem"><code>MINIMAX_API_KEY</code><br><code>MINIMAX_ANTHROPIC_BASE_URL</code>（可选，有默认值）</td>
     </tr>
     <tr>
-      <td style="padding:0.5rem">其他所有模型</td>
-      <td style="padding:0.5rem"><code class="val">35.220.164.252:3888</code></td>
-      <td style="padding:0.5rem">仅做 model alias 替换，请求直透</td>
+      <td style="padding:0.5rem">其余 <strong>第三方</strong>模型 id<br><small style="color:#666">非 <code>minimax-</code> 前缀</small></td>
+      <td style="padding:0.5rem"><code class="val">CLAUDE_PROXY_UPSTREAM</code><br><small style="color:#666">例：35.220.164.252:3888</small></td>
+      <td style="padding:0.5rem">仅做 model alias 替换，其余<strong>原样透传</strong>给第三方聚合代理</td>
       <td style="padding:0.5rem"><code>CLAUDE_PROXY_UPSTREAM</code>（可选，有默认值）</td>
     </tr>
   </table>
 
   <div class="tip" style="margin-top:1rem">
-    💡 <strong>MiniMax 格式转换细节：</strong>shim 把 Anthropic 格式（system + messages）转成 OpenAI Chat Completions 格式发给 MiniMax，收到响应后再转回 Anthropic 格式。多条 system 消息会合并为一条（MiniMax 限制）；支持 <code>&lt;think&gt;</code> 标签提取为 <code>thinking</code> 内容块；<code>max_tokens</code> 上限截断为 8192。
+    💡 <strong>第三方 MiniMax 路径的格式转换（若你的 shim 实现包含）：</strong>典型做法是把 Anthropic 请求体转成上游接受的格式再发<strong>第三方 MiniMax</strong>，响应再转回 Anthropic。具体字段/上限以你所部署的 shim 版本为准；旧版示例里曾描述 system 合并、<code>&lt;think&gt;</code>、<code>max_tokens</code> 截断等细节，部署时请对照当前 <code>claude-model-proxy.js</code>。
   </div>
 </div>
 
@@ -142,16 +143,16 @@ Claude Code ─HTTP──▶ │   127.0.0.1:3889  (本地 shim)  │
 
   <div class="file-block"><span class="filename">~/.local/bin/claude-model-proxy.js</span><span class="comment">/**
  * claude-model-proxy
- * 本地 HTTP 代理，智能路由到不同上游：
- * - minimax-* 模型 → MiniMax API（含 Anthropic↔OpenAI 格式转换）
- * - 其他模型     → 第三方代理（仅做 model alias 替换）
+ * 本地 HTTP 代理，第三方双上游路由：
+ * - minimax-* → 第三方 MiniMax（Anthropic 兼容端）
+ * - 其他 id → 第三方聚合代理（仅 model alias，余下透传）
  */</span>
 
 const http = require("http");
 const https = require("https");
 const { URL } = require("url");
 
-<span class="comment">// 默认上游：第三方代理</span>
+<span class="comment">// 默认上游：第三方聚合代理</span>
 const UPSTREAM = new URL(
   process.env.CLAUDE_PROXY_UPSTREAM || "http://35.220.164.252:3888"
 );
@@ -159,20 +160,20 @@ const UPSTREAM = new URL(
 const LISTEN_PORT = Number(process.env.CLAUDE_PROXY_PORT || 3889);
 const LISTEN_BIND = process.env.CLAUDE_PROXY_BIND || "127.0.0.1";
 
-<span class="comment">// MiniMax 上游（需要设置 MINIMAX_API_KEY 才会启用）</span>
+<span class="comment">// 第三方 MiniMax 上游（需 MINIMAX_API_KEY）</span>
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY || "";
 const MINIMAX_BASE_URL = process.env.MINIMAX_BASE_URL || "https://api.minimaxi.com/v1";
 let MINIMAX_UPSTREAM = null;
-<span class="comment">// MINIMAX_API_KEY 未设置则禁用 MiniMax 路由</span>
+<span class="comment">// MINIMAX_API_KEY 未设置则禁用「第三方 MiniMax」分支</span>
 try { if (MINIMAX_API_KEY) MINIMAX_UPSTREAM = new URL(MINIMAX_BASE_URL); } catch (_) {}
 
-<span class="comment">// 判断是否路由到 MiniMax</span>
+<span class="comment">// 判断是否走第三方 MiniMax 分支</span>
 function isMiniMaxModel(modelId) {
   if (!modelId || !MINIMAX_UPSTREAM) return false;
   return modelId.toLowerCase().startsWith("minimax-");
 }
 
-<span class="comment">// 模型别名表：Claude Code 发出的 id → 第三方代理实际支持的 id（对 MiniMax 模型无效）</span>
+<span class="comment">// 模型别名表：Claude Code id → 第三方聚合代理实际支持的 id（minimax-* 不走此表）</span>
 const MODEL_ALIASES = {
   <span class="key">"claude-opus-4-7-1m"</span>: <span class="val">"claude-opus-4-7"</span>,   <span class="comment">// 菜单1 → opus-4-7</span>
   <span class="key">"claude-opus-4-6-1m"</span>: <span class="val">"claude-opus-4-6"</span>,   <span class="comment">// 菜单1（历史版）</span>
@@ -197,11 +198,11 @@ function rewriteBody(buf, contentType) {
   if (!obj || typeof obj.model !== "string")
     return { buf, from: null, to: null, isMiniMax: false };
 
-  <span class="comment">// MiniMax 路由：原样透传 body（forwardToMiniMax 负责格式转换）</span>
+  <span class="comment">// 第三方 MiniMax 路由：原样透传 body（forwardToMiniMax 负责格式转换）</span>
   if (isMiniMaxModel(obj.model))
     return { buf, from: obj.model, to: obj.model, isMiniMax: true, body: obj };
 
-  <span class="comment">// 默认路由：做 alias 替换后转发给第三方代理</span>
+  <span class="comment">// 默认路由：alias 后转发给第三方聚合代理</span>
   const mapped = MODEL_ALIASES[obj.model];
   if (!mapped || mapped === obj.model) return { buf, from: null, to: null, isMiniMax: false };
   const from = obj.model; obj.model = mapped;
@@ -209,7 +210,7 @@ function rewriteBody(buf, contentType) {
   return { buf: Buffer.from(JSON.stringify(obj)), from, to: mapped, isMiniMax: false };
 }
 
-<span class="comment">// ── 转发请求（非 MiniMax）─────────────────────────────────────────</span>
+<span class="comment">// ── 转发请求（非第三方 MiniMax 分支）─────────────────────────────────────────</span>
 <span class="comment">// rw.isMiniMax === true 时由 forwardToMiniMax() 处理，此路径不执行</span>
 const lib = UPSTREAM.protocol === "https:" ? https : http;
 fwd = lib.request({ hostname: UPSTREAM.hostname, port: UPSTREAM.port,
@@ -223,13 +224,13 @@ fwd.end(rw.buf);  <span class="comment">// 发送改写后的请求（alias 已�
 </div>
 
 <!-- ═══════════════════════════════════════ -->
-<h2>🔄 手术第二步：Systemd 守护进程（含 MiniMax Key）</h2>
+<h2>🔄 手术第二步：Systemd 守护进程（含第三方 MiniMax 密钥）</h2>
 
 <div class="step">
   <span class="tag tag-file">FILE</span> <code>~/.config/systemd/user/claude-model-proxy.service</code>
 
   <div class="file-block"><span class="filename">~/.config/systemd/user/claude-model-proxy.service</span>[Unit]
-Description=本地模型路由 shim（alias 替换 + MiniMax 双上游路由）
+Description=本地模型路由 shim（alias + 第三方双上游）
 After=network-online.target
 
 [Service]
@@ -237,7 +238,7 @@ Type=simple
 Environment=CLAUDE_PROXY_PORT=3889
 Environment=CLAUDE_PROXY_BIND=127.0.0.1
 Environment=CLAUDE_PROXY_UPSTREAM=http://35.220.164.252:3888
-<span class="comment"># 启用 MiniMax 路由：填入 API Key，留空则禁用</span>
+<span class="comment"># 启用「第三方 MiniMax」分支：填入 API Key，留空则禁用</span>
 Environment=MINIMAX_API_KEY=your-minimax-key-here
 Environment=MINIMAX_BASE_URL=https://api.minimaxi.com/v1
 ExecStart=/home/lei/.nvm/versions/node/v22.22.0/bin/node \
@@ -277,13 +278,12 @@ unset ANTHROPIC_DEFAULT_OPUS_MODEL
 unset ANTHROPIC_DEFAULT_SONNET_MODEL
 unset ANTHROPIC_DEFAULT_HAIKU_MODEL
 
-<span class="comment"># 菜单第 5 项：DeepSeek V4 Pro（通过第三方代理）
-# 注意：这个模型代理本身就有，不需要 shim 做别名</span>
+<span class="comment"># 菜单第 5 项：第三方模型（示例 id，走第三方聚合代理透传；无需 shim 别名）</span>
 export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION</span>=<span class="val">"deepseek-v4-pro"</span>
-export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION_NAME</span>=<span class="val">"DeepSeek V4 Pro (Custom)"</span>
-export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION</span>=<span class="val">"通过第三方代理"</span>
+export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION_NAME</span>=<span class="val">"第三方模型（示例）"</span>
+export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION</span>=<span class="val">"经第三方聚合代理透传"</span>
 
-<span class="comment"># 禁用 Claude Code 的实验性 beta 特性（上游代理不支持）</span>
+<span class="comment"># 禁用 Claude Code 的实验性 beta 特性（第三方聚合代理不支持）</span>
 export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1
 export DISABLE_PROMPT_CACHING=1
 export DISABLE_TELEMETRY=1
@@ -314,7 +314,7 @@ LISTEN 0 511 127.0.0.1:3889 0.0.0.0:*  users:(("node",pid=3970232))</div>
 
   <p style="margin-top:1rem">检查 Claude Code 进程的 env（确认 Base URL 是 shim）：</p>
   <div class="file-block">$ tr '\0' '\n' &lt; /proc/&lt;pid&gt;/environ | grep ANTHROPIC
-ANTHROPIC_BASE_URL=http://127.0.0.1:3889  <span class="comment"># ← 应该是 shim 地址，不是上游代理</span>
+ANTHROPIC_BASE_URL=http://127.0.0.1:3889  <span class="comment"># ← 应是本地 shim，不是第三方聚合代理直连地址</span>
 ANTHROPIC_API_KEY=sk-SL2...</div>
 </div>
 
@@ -354,16 +354,16 @@ ANTHROPIC_API_KEY=sk-SL2...</div>
       <td style="color:#22c55e;padding:0.5rem">✅ 工作</td>
     </tr>
     <tr style="border-bottom:1px solid #222">
-      <td style="padding:0.5rem">5. DeepSeek V4 Pro</td>
-      <td style="padding:0.5rem"><code class="key">deepseek-v4-pro</code></td>
-      <td style="padding:0.5rem">无需改写（代理原生支持）</td>
+      <td style="padding:0.5rem">5. 第三方模型（透传上游）</td>
+      <td style="padding:0.5rem"><code class="key">deepseek-v4-pro</code> 等</td>
+      <td style="padding:0.5rem">不在别名表则<strong>原样透传</strong>至 <code class="val">CLAUDE_PROXY_UPSTREAM</code>（上游需原生支持该 id）</td>
       <td style="color:#22c55e;padding:0.5rem">✅ 工作</td>
     </tr>
     <tr>
-      <td style="padding:0.5rem">自定义 MiniMax</td>
+      <td style="padding:0.5rem">6. 第三方模型（MiniMax）</td>
       <td style="padding:0.5rem"><code class="key">minimax-*</code></td>
-      <td style="padding:0.5rem">路由到 api.minimaxi.com（格式双向转换）</td>
-      <td style="color:#22c55e;padding:0.5rem">✅ 工作（需设 MINIMAX_API_KEY）</td>
+      <td style="padding:0.5rem">去前缀后转发至<strong>第三方 MiniMax</strong> Anthropic 兼容端（<code class="val">MINIMAX_ANTHROPIC_BASE_URL</code>，国内常用 <code class="val">https://api.minimaxi.com/anthropic</code>；双向格式转换）</td>
+      <td style="color:#22c55e;padding:0.5rem">✅ 工作（需 <code class="val">MINIMAX_API_KEY</code>）</td>
     </tr>
   </table>
 </div>
@@ -374,9 +374,9 @@ ANTHROPIC_API_KEY=sk-SL2...</div>
 <div class="step">
   <ol>
     <li><strong>改请求体，不改 URL</strong> — Claude Code 发的是 HTTP POST JSON，把 model 字段从 JSON body 里改掉，比改 HTTP Header 更可靠。</li>
-    <li><strong>只改认识的 id，未知 id 原样透传</strong> — <code>deepseek-v4-pro</code> 不在别名表里，shim 就直接透传到上游，上游有这个模型所以能正常工作。</li>
-    <li><strong>MiniMax 双向格式转换</strong> — MiniMax 不支持 Anthropic 格式，shim 在内存里做完整的 Anthropic→OpenAI 转换再发请求，收到后再转回，Claude Code 完全感知不到。</li>
-    <li><strong>MiniMax 只需 Key，无需改 Claude Code 配置</strong> — 在 systemd service 里设好 <code>MINIMAX_API_KEY</code>，shim 自动识别 <code>minimax-</code> 前缀并路由，对 Claude Code 透明。</li>
+    <li><strong>只改认识的 id，未知 id 原样透传</strong> — 典型<strong>第三方</strong>模型 id（例如 <code>deepseek-v4-pro</code>）不在别名表里时，shim 直接透传到 <code>CLAUDE_PROXY_UPSTREAM</code>；上游已收录该 id 即可工作。</li>
+    <li><strong>第三方 MiniMax 分支的格式转换</strong> — 若走 <code>minimax-*</code> 且已配置 <code>MINIMAX_API_KEY</code>，由 shim 与上游约定完成 Anthropic 兼容对话；Claude Code 侧仍只认 Anthropic 形态。</li>
+    <li><strong>第三方 MiniMax 仅需密钥即可路由</strong> — 在 systemd 或环境中设好 <code>MINIMAX_API_KEY</code>（及按需的 <code>MINIMAX_ANTHROPIC_BASE_URL</code>），shim 识别 <code>minimax-</code> 前缀并转发，对 Claude Code 透明。</li>
     <li><strong>stdout → stderr 打日志</strong> — shim 里用 <code>console.error()</code> 写日志，这样不会干扰 HTTP 响应数据，同时可以通过 <code>journalctl</code> 实时看到每次改写。</li>
     <li><strong>systemd 守护</strong> — 用 user systemd service 管理 shim，崩溃后 3 秒自动重启，开机自启，不用手动盯着。</li>
     <li><strong>进程 env 是一次性的</strong> — <code>~/.bashrc</code> 改了之后，已启动的 Claude Code 进程不会自动更新，必须 <code>source ~/.bashrc</code> 或重启进程。</li>
