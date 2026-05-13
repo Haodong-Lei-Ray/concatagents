@@ -13,7 +13,7 @@ When model calls fail (401/400/unsupported), run a single workflow that:
 2. Finds a working API key/endpoint combination.
 3. Repairs the local agent configs consistently.
 4. Verifies the repaired path end-to-end.
-5. Ends with the **Harness 收尾验收表**（与 `concatagents/README-zh.md` 同结构），仅在回复中输出，**不得**为填表去改 README 里的空白模板或提交该模板的 git 改动。
+5. Ends with the **Harness 收尾验收表**（与 `concatagents/README-zh.md` 同结构）及 **网关与密钥快照表**（见 `reference.md`），仅在回复中输出，**不得**为填表去改 README 里的空白模板或提交该模板的 git 改动。
 
 ## Typical symptoms
 
@@ -51,6 +51,7 @@ Follow this order every time:
    - `.hermes/config.yaml`: set `model.api_key` (if using custom gateway)
 6. Re-run endpoint checks and report final status.
 7. **Harness 收尾验收表（必须）**：根据本机实际验收结果，在最终回复（或交付说明）中输出与 `concatagents/README-zh.md`「Agent 收尾填报表」**同结构**的表格；单元格仅填 `是` / `否` / `不适用`。依据：`openclaw --version`、`claude --version`、`hermes doctor`（及本次修复相关的连通性探测）等客观结果；未安装或未测到的组件填 `不适用` 或 `否` 并简短说明。
+8. **网关与密钥快照表（建议）**：运行 `render_gateway_snapshot.py --discover` 生成；须含 **「用于 Harness」** 列。可选 **`--save-api-keys`** 将解析到的真实 `base_url` / `api_key` 写入 `api-key.json`（默认在脚本同目录，勿提交仓库）。
 
 ## Quick command (diagnose)
 
@@ -63,6 +64,14 @@ python "verify/agent-model-repair/scripts/diagnose_model_auth.py" \
   --anthropic-key "sk-cp-zzz"
 ```
 
+生成「网关与密钥快照表」Markdown（与 `reference.md` 同结构）：
+
+```bash
+python "verify/agent-model-repair/scripts/render_gateway_snapshot.py" --discover
+python "verify/agent-model-repair/scripts/render_gateway_snapshot.py" --discover --save-api-keys
+python "verify/agent-model-repair/scripts/render_gateway_snapshot.py" --discover --save-api-keys --json
+```
+
 ## Repair rules
 
 - Never invent model IDs.
@@ -73,7 +82,7 @@ python "verify/agent-model-repair/scripts/diagnose_model_auth.py" \
 
 ## Output format
 
-Respond in **五**个部分（顺序固定）：
+Respond in **六**个部分（顺序固定）：
 
 1. `Detected`
 2. `Working`
@@ -87,4 +96,15 @@ Respond in **五**个部分（顺序固定）：
 | Claude Code | | | |
 | Hermes | | | |
 
+6. `网关与密钥快照表` — 与 `reference.md`「网关与密钥快照表」同结构；**须含「用于 Harness」列**（填 `OpenClaw` / `Claude Code` / `Hermes` 的组合，逗号分隔，与该行网关实际被哪些组件消费一致）；密钥仅掩码、模型每格 ≤5 个、URL 如实填写。空白模板：
+
+| 用于 Harness | API Key（掩码） | 模型名（最多 5 个） | URL |
+|--------------|----------------|---------------------|-----|
+| | | | |
+| | | | |
+
 **约束（与 README-zh 一致）**：不要把填好的表写进 `README-zh.md` / `README.md` 里的空白模板；模板在仓库中保持原样，**只在对话里**输出已填表。
+
+## Cursor 侧安装副本
+
+本 skill 可同时安装在 `~/.cursor/skills/agent-model-repair/`（与仓库 `verify/agent-model-repair/` 同步；Agent 优先读 Cursor skills 目录时，命令见该目录下 `SKILL.md` 中的 `$HOME/.cursor/skills/...` 示例）。
