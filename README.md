@@ -22,11 +22,11 @@ Worried about reinstalling everything whenever you move to a new machine? No wor
 
 At the end of the run, the executing agent must show the user a filled-in table **with the same columns as below** (`Yes` / `No` / `N/A`) **in the chat reply or hand-off notes**. **Do not** change or commit edits to the blank template in this README on disk—keep the file as-is and **only** paste the completed table to the user.
 
-| Harness component | Installed | Verification passed | CLI OK (non-interactive smoke) |
-|-------------------|-----------|----------------------|--------------------------------|
-| OpenClaw | | | |
-| Claude Code | | | |
-| Hermes | | | |
+| Harness component | Installed | Verification passed | CLI OK (non-interactive smoke) | Outputs hi |
+|-------------------|-----------|----------------------|--------------------------------|------------|
+| OpenClaw | | | | |
+| Claude Code | | | | |
+| Hermes | | | | |
 
 ## Standard Execution Steps (Agent Internal Checklist)
 

@@ -6,11 +6,11 @@
 
 执行本 skill 完成检测与修复后，必须在最终交付中附带**同结构**表格；单元格填 `是` / `否` / `不适用`。不得为填表修改或提交 README 内空白模板。
 
-| Harness 组件 | 是否安装 | 是否验收通过 | CLI 可用（无交互自检） |
-|----------------|----------|----------------|------------------------|
-| OpenClaw | | | |
-| Claude Code | | | |
-| Hermes | | | |
+| Harness 组件 | 是否安装 | 是否验收通过 | CLI 可用（无交互自检） | 是否输出hi |
+|----------------|----------|----------------|------------------------|------------|
+| OpenClaw | | | | |
+| Claude Code | | | | |
+| Hermes | | | | |
 
 ## 网关与密钥快照表（建议一并输出）
 
@@ -20,6 +20,8 @@
 |--------------|----------------|---------------------|-----|
 | | | | |
 | | | | |
+
+`--discover` 会从多机常见位置合并配置（后者覆盖同名键；`OPENAI_*` 仅在未设置时用 Hermes 的 `model.base_url` / `model.api_key` 补全）：`~/.openclaw/.env` → `~/.bashrc` / `~/.zshrc` / `~/.profile` → 各 Hermes 根下的 `.env` 与 `config.yaml`（根目录：`~/.hermes`、`~/.config/hermes`（若目录存在）、`%LOCALAPPDATA%\hermes`、`$XDG_CONFIG_HOME/hermes`）→ 当前进程环境中的 `OPENAI_*` / `ANTHROPIC_*` / `HERMES_*` 仅填空。
 
 ### 一键生成（推荐）
 
@@ -55,6 +57,17 @@ python "verify/agent-model-repair/scripts/render_gateway_snapshot.py" \
 
 将 `--discover` 解析得到的 **真实** `base_url` 与 `api_key` 写入 JSON（与当前 Markdown 表行一一对应）。**不要提交到 git**（`scripts/.gitignore` 已忽略 `api-key.json`）；文件权限在 Unix 上会设为 `0600`。
 
+#### `api-key.json` 验收（若已生成）
+
+交付中除 Markdown 快照表外，建议对**本文件**单独验收；单元格填 `是` / `否` / `不适用`（未使用 `--save-api-keys` 时整表填 **不适用**）。
+
+| 验收项 | 是 / 否 / 不适用 | 说明 |
+|--------|------------------|------|
+| 文件存在 | | 默认路径为 `verify/agent-model-repair/scripts/api-key.json`；或 `--save-api-keys <path>` 指定路径 |
+| JSON 合法 | | `python -m json.tool <路径>` 可解析；含脚本写入的 `schema_version`、`discover_home`、`sources_read`、`endpoints` 等字段 |
+| 与快照表一致 | | `endpoints` 条数及每条 `base_url`、`harness` 与本次「网关与密钥快照表」一致（文件内为明文密钥，对外交付描述仍只用**掩码**） |
+| 未进入版本库 | | `git status` 中不出现该文件被跟踪；勿 `git add` |
+
 - 默认路径（仅写 `--save-api-keys`，不传路径）：与脚本同目录下的 `api-key.json`。
 - 自定义路径：`--save-api-keys /path/to/api-key.json`
 - 与 `--json` 同用时，stdout JSON 会增加字段 `api_key_json_path`。
@@ -75,6 +88,7 @@ python "verify/agent-model-repair/scripts/render_gateway_snapshot.py" --discover
 - **是否安装**：对应 CLI 在 `PATH` 中且 `--version` / `doctor` 可执行。
 - **是否验收通过**：本次涉及的网关/密钥/模型探测是否通过（含修复后复测）。
 - **CLI 可用（无交互自检）**：非交互命令成功退出（如 `openclaw gateway status`、`hermes doctor` 等），不要求用户手动点 UI。
+- **是否输出hi**：对该组件用**非交互**方式发起一次最小模型调用（如 `claude -p "只回复单词 hi"`、OpenClaw/Hermes 各自等价的无头探测），若成功且**模型回复文本中包含 `hi`**（大小写不敏感、整词或子串由你方脚本约定一致即可）填「是」；失败、未测或未装填「否」或「不适用」。
 
 ## Health checks
 
@@ -114,7 +128,7 @@ Expected:
 
 ## Repair targets
 
-- `~/.bashrc`
+- `~/.bashrc`（或 `~/.zshrc` / `~/.profile`，与 discover 一致）
   - `OPENAI_BASE_URL`
   - `OPENAI_API_KEY`
   - `ANTHROPIC_BASE_URL`
@@ -122,9 +136,10 @@ Expected:
   - `ANTHROPIC_AUTH_TOKEN`
 - `~/.openclaw/.env`
   - `OPENAI_API_KEY`
-- `~/.hermes/config.yaml`
-  - `model.base_url`
-  - `model.api_key`
+- Hermes `config.yaml`（`model.base_url`、`model.api_key`、`model.default`）
+  - Unix 常见：`~/.hermes/config.yaml` 或 `~/.config/hermes/config.yaml`
+  - Windows 常见：`%LOCALAPPDATA%\hermes\config.yaml`
+  - 同目录下的 `.env` 也会被 discover 读取
 
 ## Common pitfalls
 

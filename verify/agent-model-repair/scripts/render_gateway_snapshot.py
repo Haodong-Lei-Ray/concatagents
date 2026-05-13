@@ -102,24 +102,94 @@ def load_hermes(path: Path) -> Dict[str, str]:
     return out
 
 
+def _iter_hermes_roots(home: Path) -> List[Path]:
+    """Hermes may store config under ~/.hermes, %LOCALAPPDATA%\\hermes (Windows), or $XDG_CONFIG_HOME/hermes."""
+    roots: List[Path] = []
+    seen: set[str] = set()
+
+    def add(root: Path) -> None:
+        try:
+            key = str(root.resolve())
+        except OSError:
+            key = str(root)
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(root)
+
+    add(home / ".hermes")
+    cfg_hermes = home / ".config" / "hermes"
+    if cfg_hermes.is_dir():
+        add(cfg_hermes)
+    localappdata = (os.environ.get("LOCALAPPDATA") or "").strip()
+    if localappdata:
+        add(Path(localappdata) / "hermes")
+    xdg = (os.environ.get("XDG_CONFIG_HOME") or "").strip()
+    if xdg:
+        add(Path(xdg) / "hermes")
+    return roots
+
+
+def _apply_hermes_yaml_to_merged(merged: Dict[str, str], hermes: Dict[str, str]) -> None:
+    """Merge model.* from Hermes YAML; do not touch OPENAI_* here (see _sync_openai_defaults_from_hermes_keys)."""
+    for k, v in hermes.items():
+        if v:
+            merged[k] = v
+
+
+def _merge_shell_exports(merged: Dict[str, str], home: Path) -> None:
+    for name in (".bashrc", ".zshrc", ".profile"):
+        p = home / name
+        if p.is_file():
+            merged.update(parse_export_block(p.read_text(encoding="utf-8", errors="replace")))
+
+
+def _merge_process_env(merged: Dict[str, str]) -> None:
+    """Fill gaps from the current process environment (CI, IDE, or session exports)."""
+    keys = (
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "HERMES_API_KEY",
+        "HERMES_BASE_URL",
+        "HERMES_DEFAULT_MODEL",
+    )
+    for k in keys:
+        v = (os.environ.get(k) or "").strip()
+        if v and not (merged.get(k) or "").strip():
+            merged[k] = v
+
+
+def _sync_openai_defaults_from_hermes_keys(merged: Dict[str, str]) -> None:
+    """If OpenAI-compatible vars are unset but Hermes model keys exist, mirror them (same as single-file discover)."""
+    hb = (merged.get("HERMES_BASE_URL") or "").strip()
+    hk = (merged.get("HERMES_API_KEY") or "").strip()
+    hd = (merged.get("HERMES_DEFAULT_MODEL") or "").strip()
+    if hb:
+        merged.setdefault("OPENAI_BASE_URL", hb)
+    if hk:
+        merged.setdefault("OPENAI_API_KEY", hk)
+    if hd:
+        merged.setdefault("HERMES_DEFAULT_MODEL", hd)
+
+
 def discover_env(home: Path) -> Dict[str, str]:
     merged: Dict[str, str] = {}
     env_path = home / ".openclaw" / ".env"
     if env_path.is_file():
         merged.update(parse_dotenv(env_path.read_text(encoding="utf-8", errors="replace")))
-    bashrc = home / ".bashrc"
-    if bashrc.is_file():
-        merged.update(parse_export_block(bashrc.read_text(encoding="utf-8", errors="replace")))
-    hermes = load_hermes(home / ".hermes" / "config.yaml")
-    for k, v in hermes.items():
-        if v:
-            merged[k] = v
-    if hermes.get("HERMES_BASE_URL"):
-        merged.setdefault("OPENAI_BASE_URL", hermes["HERMES_BASE_URL"])
-    if hermes.get("HERMES_API_KEY"):
-        merged.setdefault("OPENAI_API_KEY", hermes["HERMES_API_KEY"])
-    if hermes.get("HERMES_DEFAULT_MODEL"):
-        merged.setdefault("HERMES_DEFAULT_MODEL", hermes["HERMES_DEFAULT_MODEL"])
+    _merge_shell_exports(merged, home)
+    for root in _iter_hermes_roots(home):
+        dot = root / ".env"
+        if dot.is_file():
+            merged.update(parse_dotenv(dot.read_text(encoding="utf-8", errors="replace")))
+        cfg = root / "config.yaml"
+        if cfg.is_file():
+            _apply_hermes_yaml_to_merged(merged, load_hermes(cfg))
+    _merge_process_env(merged)
+    _sync_openai_defaults_from_hermes_keys(merged)
     return merged
 
 
@@ -309,12 +379,31 @@ def build_rows_from_discover(
 
 
 def _discover_source_paths(home: Path) -> List[str]:
-    paths = [
+    paths: List[Path] = []
+    for p in (
         home / ".openclaw" / ".env",
         home / ".bashrc",
-        home / ".hermes" / "config.yaml",
-    ]
-    return [str(p.expanduser()) for p in paths if p.is_file()]
+        home / ".zshrc",
+        home / ".profile",
+    ):
+        if p.is_file():
+            paths.append(p)
+    for root in _iter_hermes_roots(home):
+        for name in (".env", "config.yaml"):
+            fp = root / name
+            if fp.is_file():
+                paths.append(fp)
+    out: List[str] = []
+    seen: set[str] = set()
+    for p in paths:
+        try:
+            s = str(p.expanduser().resolve())
+        except OSError:
+            s = str(p.expanduser())
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
 
 
 def build_api_key_document(
@@ -405,7 +494,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--discover",
         action="store_true",
-        help="Read ~/.bashrc, ~/.openclaw/.env, ~/.hermes/config.yaml and build rows",
+        help=(
+            "Read ~/.openclaw/.env, shell exports (~/.bashrc, ~/.zshrc, ~/.profile), "
+            "Hermes dirs (~/.hermes, ~/.config/hermes if present, %%LOCALAPPDATA%%/hermes, "
+            "$XDG_CONFIG_HOME/hermes: .env + config.yaml), "
+            "then fill gaps from process env; build rows"
+        ),
     )
     p.add_argument("--home", default=str(Path.home()), help="Home directory for --discover")
     p.add_argument(
