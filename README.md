@@ -16,17 +16,8 @@ Worried about reinstalling everything whenever you move to a new machine? No wor
 
 1. A [`model.json`](../model.json) **next to** the `concatagents/` directory (`../model.json` relative to this README), with **base URL(s)** and **API key** plus the model entries filled in (never commit real secrets to a public repo).
 
-**Goal:** complete the full Agent Harness installation and validation pipeline from a single `openclaw`-style instruction, **without repeatedly blocking on human intervention**.
+**Goal:** complete the full Agent Harness installation and setup flow from a single `openclaw`-style instruction, and finish in a state that can successfully pass [`verify/agent-model-repair`](./verify/agent-model-repair/) verification, **without repeatedly blocking on human intervention**.
 
-### Agent sign-off table (required)
-
-At the end of the run, the executing agent must show the user a filled-in table **with the same columns as below** (`Yes` / `No` / `N/A`) **in the chat reply or hand-off notes**. **Do not** change or commit edits to the blank template in this README on disk—keep the file as-is and **only** paste the completed table to the user.
-
-| Harness component | Installed | Verification passed | CLI OK (non-interactive smoke) | Outputs hi |
-|-------------------|-----------|----------------------|--------------------------------|------------|
-| OpenClaw | | | | |
-| Claude Code | | | | |
-| Hermes | | | | |
 
 ## Standard Execution Steps (Agent Internal Checklist)
 
@@ -138,32 +129,17 @@ J -->|Yes| K["Output final success report"]
 
 ## Automated verification (Agent / CI)
 
-The script [`scripts/verify-harness.sh`](./scripts/verify-harness.sh) runs non-interactively and does not print secrets. It reads `model.json` one directory up by default (override with `MODEL_JSON`). If `ANTHROPIC_API_KEY` or `MINIMAX_API_KEY` is exported, it also runs a `claude -p` end-to-end check. If `ANTHROPIC_BASE_URL` is **not** set, the script defaults it from `model.json` (`minimax-portal` first, then `minimax`) so China portal keys are not sent to the global host by mistake. Without any key, that step is SKIP (do not store secrets in `model.json` for the script to read—export them in the environment).
+For automated verification runs, the agent/CI flow should auto-invoke the following skills:
 
-### Per-component smoke checks (no API keys / no live model)
+- `verify/agent-model-repair/`:
+  Use this skill automatically whenever validation hits model/auth/endpoint failures (for example `401`, `400 unsupported`, broken model routing, or inconsistent OpenClaw / Claude / Hermes behavior). It should diagnose the failure, repair the local config path when possible, rerun the checks, and return the required Harness sign-off table in the chat or hand-off output.
 
-With CLIs installed and on `PATH`, your **current working directory can be home (`~`) or anywhere** (for example open a terminal in `~`). Rows below except the harness are global commands. [`verify-harness.sh`](./scripts/verify-harness.sh) resolves `concatagents/` and the parent `model.json` from **the script’s own path**, so run it as `bash /path/to/repo/concatagents/scripts/verify-harness.sh`—you do **not** need to `cd` into `concatagents` first. The script checks binaries, `model.json`, optional local proxy syntax, and an anonymous MiniMax probe. Without exported keys, the live `claude -p` step is SKIP.
+Recommended trigger points:
 
-| Component | Command | Pass criterion |
-|-----------|---------|----------------|
-| Claude Code | `claude --version` | Prints one version line |
-| OpenClaw | `openclaw --version` | Prints one OpenClaw version line |
-| OpenClaw | `openclaw skills list` | Output contains `Skills` or column header `Skill` (newer CLI may print config warnings first) |
-| Hermes | `hermes doctor` | Exit code `0` |
-| Full harness (no API keys) | `bash /path/to/repo/concatagents/scripts/verify-harness.sh` (replace `/path/to/repo` with your clone; cwd may be `~`) or `cd /path/to/repo/concatagents` then `bash scripts/verify-harness.sh` | Exit code `0`; credential section is SKIP, `FAIL=0` |
+- during automated verification when any provider/model check fails
+- when cross-agent model availability is inconsistent
 
-### Full verification with API keys (still non-interactive)
 
-After exporting keys in the environment, the same `verify-harness.sh` runs a real `claude -p` (about a 45s timeout). Do not put secrets in `model.json`; use `export` or CI secrets. Run the harness from **`~` or any cwd** using the script’s absolute path.
-
-| Goal | Command | Pass criterion |
-|------|---------|------------------|
-| Harness + live model | `export MINIMAX_API_KEY='…'` or `export ANTHROPIC_API_KEY='…'`; optionally `export ANTHROPIC_BASE_URL='…'` (must match the key’s region); then `bash /path/to/repo/concatagents/scripts/verify-harness.sh` (same path rule; cwd may be `~`) | A `[OK]` line for the live `claude -p` step and the substring `PONG`; `FAIL=0`; credential section is **not** SKIP |
-| Default endpoint / model | Export only the key, omit `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | Script reads `baseUrl` and the tail of `defaultAgent.model.primary` from the parent `model.json` |
-
-## End-to-end success criterion (automated)
-
-The **only** acceptance bar is **fully automated, non-interactive** checks for every agent/model path you must cover: CLI exit codes, a clean [`verify-harness.sh`](./scripts/verify-harness.sh) run (`FAIL=0`), and—when keys are exported—the scripted live probes (for example the harness’s minimal `claude -p` ping). **If anything fails, the executor (Agent or CI) must read stdout/stderr and logs, fix the underlying misconfiguration or code, and re-run until all checks pass**—a manual “type hi in the UI” gate is **not** acceptable as a substitute.
 
 ## Q&A
 
