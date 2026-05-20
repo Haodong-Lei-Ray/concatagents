@@ -44,3 +44,6 @@ htmlcov/
 *~
 .DS_Store
 Thumbs.db
+
+# Local secrets for Claude Code proxy
+api-local.json

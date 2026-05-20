@@ -1,79 +1,129 @@
 #!/usr/bin/env node
 /**
- * claude-model-proxy — local HTTP shim for Claude Code (see concatagents/claude-code-proxy.html).
- * - Rewrites Claude menu model ids to ids your upstream accepts (MODEL_ALIASES).
- * - If model id starts with "minimax-" and MINIMAX_API_KEY is set, strips the prefix and
- *   forwards to MiniMax Anthropic-compatible base (default https://api.minimax.io/anthropic).
- * - Otherwise forwards to CLAUDE_PROXY_UPSTREAM (required for non-MiniMax traffic).
+ * claude-model-proxy — local routing shim for Claude Code.
  *
- * Env:
- *   CLAUDE_PROXY_UPSTREAM   e.g. http://host:3888
- *   CLAUDE_PROXY_PORT       default 3889
- *   CLAUDE_PROXY_BIND       default 127.0.0.1
- *   MINIMAX_API_KEY         optional; enables minimax-* routing
- *   MINIMAX_ANTHROPIC_BASE_URL  default https://api.minimax.io/anthropic
+ * Routing policy:
+ * - Model ids matching a configured route's model/matchModels go to that route.
+ * - Unknown Claude built-in ids fall back to routes.minimax.
+ *
+ * Claude Code talks to this shim via ANTHROPIC_BASE_URL=http://127.0.0.1:3889.
+ * Upstream base URLs and API keys live in ../api-local.json by default.
  */
 "use strict";
 
+const fs = require("fs");
 const http = require("http");
-const https = require("https");
+const path = require("path");
 const { URL } = require("url");
+const {
+  stripProcessProxyEnv,
+  upstreamRequest,
+} = require("./upstream-http");
 
-const LISTEN_PORT = Number(process.env.CLAUDE_PROXY_PORT || 3889);
-const LISTEN_BIND = process.env.CLAUDE_PROXY_BIND || "127.0.0.1";
-const UPSTREAM_RAW = process.env.CLAUDE_PROXY_UPSTREAM || "";
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY || "";
-const MINIMAX_ANTHROPIC_BASE = (
-  process.env.MINIMAX_ANTHROPIC_BASE_URL || "https://api.minimax.io/anthropic"
-).replace(/\/$/, "");
+const DEFAULT_CONFIG_PATH = path.resolve(__dirname, "..", "api-local.json");
+const CONFIG_PATH = path.resolve(process.env.CLAUDE_PROXY_CONFIG || DEFAULT_CONFIG_PATH);
 
-let UPSTREAM;
-try {
-  UPSTREAM = UPSTREAM_RAW ? new URL(UPSTREAM_RAW) : null;
-} catch {
-  console.error("[claude-model-proxy] Invalid CLAUDE_PROXY_UPSTREAM");
+function parseBooleanFlag(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || ""));
+}
+
+const tyty_flag = parseBooleanFlag(process.env.tyty_flag || process.env.TYTY_FLAG);
+
+if (!tyty_flag) {
+  stripProcessProxyEnv();
+}
+
+function loadConfig() {
+  let raw;
+  try {
+    raw = fs.readFileSync(CONFIG_PATH, "utf8");
+  } catch (err) {
+    console.error(`[claude-model-proxy] Cannot read config: ${CONFIG_PATH}`);
+    console.error(`[claude-model-proxy] ${err.message}`);
+    process.exit(1);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error(`[claude-model-proxy] Invalid JSON config: ${CONFIG_PATH}`);
+    console.error(`[claude-model-proxy] ${err.message}`);
+    process.exit(1);
+  }
+}
+
+const config = loadConfig();
+const LISTEN_PORT = Number(process.env.CLAUDE_PROXY_PORT || config.listen?.port || 3889);
+const LISTEN_BIND = process.env.CLAUDE_PROXY_BIND || config.listen?.bind || "127.0.0.1";
+
+function requiredRoute(name) {
+  const route = config.routes?.[name];
+  if (!route?.baseUrl || !route?.apiKey || !route?.model) {
+    console.error(
+      `[claude-model-proxy] api-local.json requires routes.${name}.baseUrl/apiKey/model`,
+    );
+    process.exit(1);
+  }
+  try {
+    route.url = new URL(route.baseUrl.replace(/\/$/, ""));
+  } catch (err) {
+    console.error(`[claude-model-proxy] Invalid routes.${name}.baseUrl: ${route.baseUrl}`);
+    console.error(`[claude-model-proxy] ${err.message}`);
+    process.exit(1);
+  }
+  return route;
+}
+
+const routes = Object.fromEntries(
+  Object.keys(config.routes || {}).map((name) => [name, requiredRoute(name)]),
+);
+
+if (!routes.minimax) {
+  console.error("[claude-model-proxy] api-local.json requires routes.minimax");
   process.exit(1);
 }
 
-const MODEL_ALIASES = {
-  "claude-opus-4-7-1m": "claude-opus-4-7",
-  "claude-opus-4-6-1m": "claude-opus-4-6",
-  "claude-opus-4-5-1m": "claude-opus-4-5-20251101",
-  "claude-sonnet-4-6-1m": "claude-sonnet-4-6",
-  "claude-sonnet-4-5-1m": "claude-sonnet-4-5-20250929",
-  "claude-haiku-4-5": "claude-haiku-4-5-20251001",
-  "claude-opus-4-5": "claude-opus-4-5-20251101",
-  "claude-sonnet-4-5": "claude-sonnet-4-5-20250929",
-  "claude-sonnet-4": "claude-sonnet-4-20250514",
-  "claude-opus-4": "claude-opus-4-20250514",
-};
+const routeModels = new Map();
+for (const [name, route] of Object.entries(routes)) {
+  for (const model of [route.model, ...(route.matchModels || [])].filter(Boolean)) {
+    routeModels.set(model, { name, route });
+  }
+}
+
+function chooseRoute(model) {
+  return routeModels.get(model) || { name: "minimax", route: routes.minimax };
+}
 
 function rewriteJsonBody(buf) {
-  if (!buf.length) return { out: buf, mode: "upstream" };
+  if (!buf.length) return { out: buf, routeName: "minimax", modelFrom: "", modelTo: routes.minimax.model };
   let obj;
   try {
     obj = JSON.parse(buf.toString("utf8"));
   } catch {
-    return { out: buf, mode: "upstream" };
+    return { out: buf, routeName: "minimax", modelFrom: "", modelTo: routes.minimax.model };
   }
   if (!obj || typeof obj.model !== "string") {
-    return { out: buf, mode: "upstream" };
+    return { out: buf, routeName: "minimax", modelFrom: "", modelTo: routes.minimax.model };
   }
-  const m = obj.model;
-  if (MINIMAX_API_KEY && m.toLowerCase().startsWith("minimax-")) {
-    obj.model = m.replace(/^minimax-/i, "");
-    return { out: Buffer.from(JSON.stringify(obj)), mode: "minimax" };
+
+  const from = obj.model;
+  const picked = chooseRoute(from);
+  obj.model = picked.route.model;
+  delete obj.stream;
+  if (from !== obj.model) {
+    console.error(`[claude-model-proxy][${picked.name}] ${from} -> ${obj.model}`);
+  } else {
+    console.error(`[claude-model-proxy][${picked.name}] ${from}`);
   }
-  const mapped = MODEL_ALIASES[m];
-  if (mapped && mapped !== m) {
-    obj.model = mapped;
-    console.error(`[claude-model-proxy][alias] ${m} -> ${mapped}`);
-  }
-  return { out: Buffer.from(JSON.stringify(obj)), mode: "upstream" };
+  return {
+    out: Buffer.from(JSON.stringify(obj)),
+    routeName: picked.name,
+    modelFrom: from,
+    modelTo: obj.model,
+  };
 }
 
-function filterHeaders(h) {
-  const out = { ...h };
+function filterHeaders(headers) {
+  const out = { ...headers };
   const drop = new Set([
     "connection",
     "keep-alive",
@@ -81,101 +131,161 @@ function filterHeaders(h) {
     "transfer-encoding",
     "content-length",
     "host",
+    "authorization",
+    "x-api-key",
   ]);
-  for (const k of Object.keys(out)) {
-    if (drop.has(k.toLowerCase())) delete out[k];
+  for (const key of Object.keys(out)) {
+    if (drop.has(key.toLowerCase())) delete out[key];
   }
   return out;
 }
 
+function targetFor(route, reqUrl) {
+  const parsed = new URL(reqUrl || "/", "http://local");
+  const incoming = parsed.pathname || "/";
+  const basePath = route.url.pathname.replace(/\/$/, "");
+  const targetPath = `${basePath}${incoming.startsWith("/") ? incoming : `/${incoming}`}`;
+  const target = new URL(route.url.href);
+  target.pathname = targetPath.replace(/\/{2,}/g, "/");
+  target.search = "";
+  return target;
+}
+
 const server = http.createServer((req, res) => {
+  if ((req.method === "GET" || req.method === "HEAD") && (req.url === "/" || req.url === "")) {
+    res.writeHead(200, { "content-type": "text/plain" });
+    if (req.method === "HEAD") res.end();
+    else res.end("ok\n");
+    console.error(`[claude-model-proxy][local] ${req.method} / -> 200`);
+    return;
+  }
+
   const chunks = [];
-  req.on("data", (c) => chunks.push(c));
+  req.on("data", (chunk) => chunks.push(chunk));
+  req.on("error", (err) => {
+    console.error(`[claude-model-proxy][request] ${err.message}`);
+    if (!res.headersSent) res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: err.message }));
+  });
   req.on("end", () => {
-    const buf = Buffer.concat(chunks);
-    const ct = (req.headers["content-type"] || "").toLowerCase();
-    let bodyForForward = buf;
-    let useMinimax = false;
-
-    if (ct.includes("application/json") && buf.length) {
-      const rw = rewriteJsonBody(buf);
-      bodyForForward = rw.out;
-      useMinimax = rw.mode === "minimax";
-    }
-
-    if (useMinimax && !MINIMAX_API_KEY) {
-      res.writeHead(400, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error: "minimax-* model requires MINIMAX_API_KEY",
-        }),
-      );
+    const original = Buffer.concat(chunks);
+    if ((req.url || "").includes("/count_tokens")) {
+      let inputTokens = 1;
+      try {
+        const obj = JSON.parse(original.toString("utf8") || "{}");
+        inputTokens = Math.max(1, Math.ceil(JSON.stringify(obj).length / 4));
+      } catch (_) {}
+      const body = Buffer.from(JSON.stringify({ input_tokens: inputTokens }));
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "content-length": String(body.length),
+      });
+      res.end(body);
+      console.error(`[claude-model-proxy][local] ${req.method} ${req.url} -> count_tokens=${inputTokens}`);
       return;
     }
 
-    if (!useMinimax && !UPSTREAM) {
-      res.writeHead(500, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error:
-            "Set CLAUDE_PROXY_UPSTREAM for non-MiniMax requests (or use minimax-* with MINIMAX_API_KEY)",
-        }),
-      );
-      return;
-    }
-
-    const baseHref = useMinimax
-      ? `${MINIMAX_ANTHROPIC_BASE}/`
-      : `${UPSTREAM.origin}/`;
+    const contentType = String(req.headers["content-type"] || "").toLowerCase();
+    const rewritten = contentType.includes("application/json")
+      ? rewriteJsonBody(original)
+      : { out: original, routeName: "minimax" };
+    const route = routes[rewritten.routeName] || routes.minimax;
+    console.error(`[claude-model-proxy][${rewritten.routeName}] ${req.method} ${req.url}`);
 
     let targetUrl;
     try {
-      targetUrl = new URL(req.url || "/", baseHref);
-    } catch (e) {
+      targetUrl = targetFor(route, req.url);
+    } catch (err) {
       res.writeHead(400, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: String(e.message) }));
+      res.end(JSON.stringify({ error: err.message }));
       return;
     }
 
-    const isHttps = targetUrl.protocol === "https:";
-    const lib = isHttps ? https : http;
     const headers = filterHeaders(req.headers);
-    headers.host = targetUrl.host;
-    if (useMinimax && MINIMAX_API_KEY) {
-      headers.authorization = `Bearer ${MINIMAX_API_KEY}`;
-      headers["x-api-key"] = MINIMAX_API_KEY;
-    }
-    const hasBody = req.method !== "GET" && req.method !== "HEAD";
-    if (hasBody) {
-      headers["content-length"] = String(bodyForForward.length);
-    }
+    headers.host = targetUrl.hostname;
+    headers["x-api-key"] = route.apiKey;
+    headers.authorization = `Bearer ${route.apiKey}`;
 
-    const preq = lib.request(
-      {
-        hostname: targetUrl.hostname,
-        port: targetUrl.port || (isHttps ? 443 : 80),
-        path: targetUrl.pathname + targetUrl.search,
-        method: req.method,
-        headers,
-      },
-      (pres) => {
-        res.writeHead(pres.statusCode || 502, pres.headers);
-        pres.pipe(res);
-      },
+    const hasBody = req.method !== "GET" && req.method !== "HEAD";
+    if (hasBody) headers["content-length"] = String(rewritten.out.length);
+
+    console.error(
+      `[claude-model-proxy][${rewritten.routeName}] upstream ${targetUrl.hostname} -> direct`,
     );
-    preq.on("error", (err) => {
-      console.error("[claude-model-proxy]", err);
-      if (!res.headersSent) {
-        res.writeHead(502, { "content-type": "application/json" });
-      }
-      res.end(JSON.stringify({ error: err.message }));
-    });
-    preq.end(hasBody ? bodyForForward : undefined);
+
+    upstreamRequest({
+      targetUrl: targetUrl.href,
+      method: req.method,
+      headers,
+      body: hasBody ? rewritten.out : undefined,
+    })
+      .then((upstreamRes) => {
+        let out = upstreamRes.body;
+        const contentType = String(upstreamRes.headers["content-type"] || "");
+        if (contentType.includes("application/json")) {
+          try {
+            const obj = JSON.parse(out.toString("utf8"));
+            if (obj && typeof obj === "object") {
+              if (
+                rewritten.modelFrom &&
+                rewritten.modelTo &&
+                rewritten.modelFrom !== rewritten.modelTo &&
+                typeof obj.model === "string"
+              ) {
+                obj.model = rewritten.modelFrom;
+              }
+              if (Array.isArray(obj.content)) {
+                const textParts = [];
+                for (const part of obj.content) {
+                  if (part && part.type === "text" && typeof part.text === "string") {
+                    textParts.push(part.text);
+                  }
+                }
+                if (textParts.length === 0) {
+                  for (const part of obj.content) {
+                    if (part && part.type === "thinking" && typeof part.thinking === "string") {
+                      textParts.push(part.thinking);
+                    }
+                  }
+                }
+                obj.content = [{ type: "text", text: textParts.join("\n").trim() || "" }];
+              }
+              out = Buffer.from(JSON.stringify(obj));
+            }
+          } catch (_) {
+            // Leave non-JSON responses untouched.
+          }
+        }
+        const outHeaders = { ...upstreamRes.headers };
+        delete outHeaders.connection;
+        delete outHeaders["keep-alive"];
+        delete outHeaders["transfer-encoding"];
+        outHeaders["content-length"] = String(out.length);
+        res.writeHead(upstreamRes.statusCode || 502, outHeaders);
+        res.end(out);
+      })
+      .catch((err) => {
+        console.error(`[claude-model-proxy][${rewritten.routeName}] ${err.message}`);
+        if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      });
   });
 });
 
+server.on("clientError", (err, socket) => {
+  console.error(`[claude-model-proxy][client] ${err.message}`);
+  try {
+    socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+  } catch (_) {}
+});
+
 server.listen(LISTEN_PORT, LISTEN_BIND, () => {
+  console.error(`[claude-model-proxy] config=${CONFIG_PATH}`);
+  console.error(`[claude-model-proxy] listening http://${LISTEN_BIND}:${LISTEN_PORT}`);
   console.error(
-    `[claude-model-proxy] http://${LISTEN_BIND}:${LISTEN_PORT} -> upstream=${UPSTREAM_RAW || "(unset)"} | minimax=${MINIMAX_ANTHROPIC_BASE}`,
+    `[claude-model-proxy] tyty_flag=${tyty_flag ? "true (leave routing to OS/Tyty TUN)" : "false (strip proxy env; force direct upstream)"}`,
+  );
+  console.error(
+    `[claude-model-proxy] known models: ${Array.from(routeModels.keys()).join(", ")}`,
   );
 });

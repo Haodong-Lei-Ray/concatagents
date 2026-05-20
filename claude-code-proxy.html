@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Claude Code 转接口手术详解 v2</title>
+<title>Claude Code 转接口手术详解 v3</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 2rem; line-height: 1.8; }
@@ -37,7 +37,7 @@
 
 <h1>🛠️ Claude Code 转接口手术详解</h1>
 
-<p style="color:#888;font-size:0.9rem;margin-bottom:2rem">目标：将 Claude Code 的请求从"直连 Anthropic 官方 API"改到"经<strong>第三方</strong>上游（聚合代理等）+ 本地智能路由 shim"；shim 支持多上游，不同模型自动路由到不同<strong>第三方</strong>后端。</p>
+<p style="color:#888;font-size:0.9rem;margin-bottom:2rem">目标：Claude Code 只连接本地 <strong>127.0.0.1:3889</strong>；本地 shim 从 <code>api-local.json</code> 读取不同上游的 URL / API Key，实现菜单 1-4 固定走 MiniMax，菜单 5 走另一套 API。</p>
 
 <!-- ═══════════════════════════════════════ -->
 <h2>📋 背景问题</h2>
@@ -74,7 +74,32 @@
 <p>Claude Code 是闭源的，我们没法改它的模型 id 逻辑。唯一的办法是：</p>
 <div class="solution">
   <span class="tag tag-solution">SOLUTION</span>
-  <strong>在 Claude Code 和第三方上游之间加一个本地 HTTP shim：按 model 前缀把流量分到第三方聚合代理或第三方 MiniMax（Anthropic 兼容）等后端，并在需要时自动做格式转换。</strong>
+  <strong>在 Claude Code 和第三方上游之间加一个本地 HTTP shim：Claude Code 只看见一个 Anthropic-compatible endpoint；shim 根据请求体里的 <code>model</code> 决定走 <code>api-local.json.routes.minimax</code> 还是 <code>api-local.json.routes.custom</code>。</strong>
+</div>
+
+<div class="step">
+  <span class="tag tag-file">FILE</span> <code>concatagents/api-local.json</code>
+  <p>这是当前方案的唯一上游配置文件。以后换 key / URL / 模型，只改这个文件，不再改 systemd 或 shell 环境变量。</p>
+  <div class="file-block"><span class="filename">api-local.json</span>{
+  "listen": {
+    "bind": "127.0.0.1",
+    "port": 3889
+  },
+  "routes": {
+    "minimax": {
+      "baseUrl": "https://api.minimaxi.com/anthropic",
+      "apiKey": "你的 MiniMax sk-cp-...",
+      "model": "MiniMax-M2.7"
+    },
+    "custom": {
+      "baseUrl": "你的第 5 项上游 URL，例如 http://35.220.164.252:3888",
+      "apiKey": "第 5 项上游的 API key",
+      "model": "deepseek-v4-pro",
+      "matchModels": ["deepseek-v4-pro"]
+    }
+  }
+}</div>
+  <div class="tip">安全：<code>api-local.json</code> 含真实密钥，必须放进 <code>.gitignore</code>，不要提交。</div>
 </div>
 
 <!-- ═══════════════════════════════════════ -->
@@ -85,23 +110,14 @@
 Claude Code ─HTTP──▶ │   127.0.0.1:3889  (本地 shim)  │
                      └───────────────┬────────────────┘
                                      │
-                    model 以 "minimax-" 开头？
+                  model 是否为第 5 项 custom?
                          │
              ┌───────────┴───────────┐
-             │ YES                   │ NO
+             │ NO                    │ YES
              ▼                       ▼
-   第三方 MiniMax              第三方聚合代理
-   Anthropic 兼容 API          35.220.164.252:3888
-   （可配置区域/域名）                │
-             │                       ▼
-             │                上游已收录的
-             │                Anthropic/OpenAI 等 id
-             │
-   ┌─────────┴──────────┐
-   │ 第三方路径上        │
-   │ 可能需格式转换      │
-   │（以 shim 为准）     │
-   └────────────────────┘
+   routes.minimax              routes.custom
+   菜单 1-4 固定 MiniMax       菜单 5 另一套 API
+   model=MiniMax-M2.7          model=deepseek-v4-pro
 </div>
 
 <!-- ═══════════════════════════════════════ -->
@@ -113,25 +129,25 @@ Claude Code ─HTTP──▶ │   127.0.0.1:3889  (本地 shim)  │
     <tr style="border-bottom:1px solid #333">
       <th style="text-align:left;padding:0.5rem;color:#888">条件</th>
       <th style="text-align:left;padding:0.5rem;color:#888">上游</th>
-      <th style="text-align:left;padding:0.5rem;color:#888">格式转换</th>
-      <th style="text-align:left;padding:0.5rem;color:#888">所需环境变量</th>
+      <th style="text-align:left;padding:0.5rem;color:#888">model 改写</th>
+      <th style="text-align:left;padding:0.5rem;color:#888">配置来源</th>
     </tr>
     <tr style="border-bottom:1px solid #222">
-      <td style="padding:0.5rem">model 以 <code class="key">minimax-</code> 开头<br><small style="color:#666">且 <code>MINIMAX_API_KEY</code> 已设</small></td>
-      <td style="padding:0.5rem"><strong>第三方 MiniMax</strong><br><code class="val">MINIMAX_ANTHROPIC_BASE_URL</code> 所指 Anthropic 兼容端</td>
-      <td style="padding:0.5rem">Anthropic ↔ 上游所需格式（双向，视实现而定）</td>
-      <td style="padding:0.5rem"><code>MINIMAX_API_KEY</code><br><code>MINIMAX_ANTHROPIC_BASE_URL</code>（可选，有默认值）</td>
+      <td style="padding:0.5rem">不是第 5 项 custom<br><small style="color:#666">即菜单 1-4</small></td>
+      <td style="padding:0.5rem"><strong>MiniMax</strong><br><code class="val">routes.minimax.baseUrl</code></td>
+      <td style="padding:0.5rem">统一改成 <code class="val">routes.minimax.model</code></td>
+      <td style="padding:0.5rem"><code>api-local.json.routes.minimax</code></td>
     </tr>
     <tr>
-      <td style="padding:0.5rem">其余 <strong>第三方</strong>模型 id<br><small style="color:#666">非 <code>minimax-</code> 前缀</small></td>
-      <td style="padding:0.5rem"><code class="val">CLAUDE_PROXY_UPSTREAM</code><br><small style="color:#666">例：35.220.164.252:3888</small></td>
-      <td style="padding:0.5rem">仅做 model alias 替换，其余<strong>原样透传</strong>给第三方聚合代理</td>
-      <td style="padding:0.5rem"><code>CLAUDE_PROXY_UPSTREAM</code>（可选，有默认值）</td>
+      <td style="padding:0.5rem">第 5 项 custom<br><small style="color:#666">如 <code>deepseek-v4-pro</code></small></td>
+      <td style="padding:0.5rem"><code class="val">routes.custom.baseUrl</code></td>
+      <td style="padding:0.5rem">统一改成 <code class="val">routes.custom.model</code></td>
+      <td style="padding:0.5rem"><code>api-local.json.routes.custom</code></td>
     </tr>
   </table>
 
   <div class="tip" style="margin-top:1rem">
-    💡 <strong>第三方 MiniMax 路径的格式转换（若你的 shim 实现包含）：</strong>典型做法是把 Anthropic 请求体转成上游接受的格式再发<strong>第三方 MiniMax</strong>，响应再转回 Anthropic。具体字段/上限以你所部署的 shim 版本为准；旧版示例里曾描述 system 合并、<code>&lt;think&gt;</code>、<code>max_tokens</code> 截断等细节，部署时请对照当前 <code>claude-model-proxy.js</code>。
+    💡 当前脚本要求两个上游都提供 Anthropic-compatible <code>/v1/messages</code> 接口；脚本会覆盖 <code>x-api-key</code> / <code>Authorization</code>，因此 Claude Code 侧只需填本地占位 key。
   </div>
 </div>
 
@@ -224,7 +240,7 @@ fwd.end(rw.buf);  <span class="comment">// 发送改写后的请求（alias 已�
 </div>
 
 <!-- ═══════════════════════════════════════ -->
-<h2>🔄 手术第二步：Systemd 守护进程（含第三方 MiniMax 密钥）</h2>
+<h2>🔄 手术第二步：Systemd 守护进程（读取 api-local.json）</h2>
 
 <div class="step">
   <span class="tag tag-file">FILE</span> <code>~/.config/systemd/user/claude-model-proxy.service</code>
@@ -237,12 +253,9 @@ After=network-online.target
 Type=simple
 Environment=CLAUDE_PROXY_PORT=3889
 Environment=CLAUDE_PROXY_BIND=127.0.0.1
-Environment=CLAUDE_PROXY_UPSTREAM=http://35.220.164.252:3888
-<span class="comment"># 启用「第三方 MiniMax」分支：填入 API Key，留空则禁用</span>
-Environment=MINIMAX_API_KEY=your-minimax-key-here
-Environment=MINIMAX_BASE_URL=https://api.minimaxi.com/v1
+Environment=CLAUDE_PROXY_CONFIG=/home/lei/Project1/concatagents/api-local.json
 ExecStart=/home/lei/.nvm/versions/node/v22.22.0/bin/node \
-          /home/lei/.local/bin/claude-model-proxy.js
+          /home/lei/Project1/concatagents/scripts/claude-model-proxy.js
 Restart=on-failure
 RestartSec=3
 
@@ -265,10 +278,12 @@ journalctl --user -u claude-model-proxy -f   <span class="comment"># 实时看�
 <div class="step">
   <span class="tag tag-file">FILE</span> <code>~/.bashrc</code>（第 180–220 行左右）
 
-  <div class="file-block"><span class="filename">~/.bashrc</span><span class="comment"># ---- Claude Code via 3rd-party proxy (Bedrock-backed) ----</span>
+  <div class="file-block"><span class="filename">~/.bashrc</span><span class="comment"># ---- Claude Code via local model proxy ----</span>
 <span class="comment"># Claude Code 请求先打到本地 shim，shim 再转发给上游</span>
 export <span class="key">ANTHROPIC_BASE_URL</span>='<span class="val">http://127.0.0.1:3889</span>'
-export <span class="key">ANTHROPIC_API_KEY</span>='sk-SL2...'
+export <span class="key">ANTHROPIC_API_KEY</span>='local-claude-model-proxy'
+export <span class="key">ANTHROPIC_AUTH_TOKEN</span>="$ANTHROPIC_API_KEY"
+export <span class="key">CLAUDE_PROXY_CONFIG</span>="/home/lei/Project1/concatagents/api-local.json"
 
 <span class="comment"># 让 Claude Code 使用自己的内置默认（菜单1-4）
 # 不要手动指定 ANTHROPIC_MODEL，避免覆盖默认</span>
@@ -276,12 +291,14 @@ unset ANTHROPIC_MODEL
 unset ANTHROPIC_SMALL_FAST_MODEL
 unset ANTHROPIC_DEFAULT_OPUS_MODEL
 unset ANTHROPIC_DEFAULT_SONNET_MODEL
-unset ANTHROPIC_DEFAULT_HAIKU_MODEL
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="MiniMax-M2.7"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME="MiniMax M2.7"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION="通过本地代理的 MiniMax 上游"
 
-<span class="comment"># 菜单第 5 项：第三方模型（示例 id，走第三方聚合代理透传；无需 shim 别名）</span>
+<span class="comment"># 菜单第 5 项：走 api-local.json routes.custom</span>
 export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION</span>=<span class="val">"deepseek-v4-pro"</span>
-export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION_NAME</span>=<span class="val">"第三方模型（示例）"</span>
-export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION</span>=<span class="val">"经第三方聚合代理透传"</span>
+export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION_NAME</span>=<span class="val">"DeepSeek V4 Pro (Custom)"</span>
+export <span class="key">ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION</span>=<span class="val">"通过本地代理的 custom 上游"</span>
 
 <span class="comment"># 禁用 Claude Code 的实验性 beta 特性（第三方聚合代理不支持）</span>
 export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1
