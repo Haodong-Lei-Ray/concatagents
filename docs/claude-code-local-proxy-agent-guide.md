@@ -1,6 +1,6 @@
 # Claude Code 本地中转代理指南
 
-这份文档写给后续接手的 agent：目标是在本机把 Claude Code 的请求稳定转发到非 Anthropic 上游，例如 DeepSeek 和 MiniMax，同时让 `/model` 菜单尽量清楚、配置文件不乱、Tyty 开关可控。
+这份文档写给后续接手的 agent：目标是在本机把 Claude Code 的请求稳定转发到非 Anthropic 上游，例如 DeepSeek 和 MiniMax，同时让 `/model` 菜单尽量清楚、配置文件不乱、网络策略交给用户环境控制。
 
 ## 最终目标
 
@@ -11,12 +11,11 @@ Claude Code 只暴露可用的本地中转模型选择：
 3. `MiniMax-M2.7`：明确展示 MiniMax M2.7。
 
 注意：Claude Code 的内置菜单会天然带 Default/Sonnet/Haiku 等选项。要压掉不可用的 Sonnet/Haiku，必须用 `~/.claude/settings.json` 的 `availableModels` 白名单。
-
+/model 只能出现这个俩个模型
 ## 文件分工
 
 - `api-local.json`：只放监听地址和各厂商上游信息。
 - `scripts/claude-model-proxy.js`：本地 HTTP shim，按请求体里的 `model` 选择 route，并改写成上游真实 model id。
-- `scripts/upstream-http.js`：只负责直连 HTTPS 请求，不做 Tyty CONNECT，不读 gsettings。
 - `~/.bashrc` / `~/.zshrc`：设置 Claude Code 指向本地代理，并定义菜单显示的 model id/name/description。
 - `~/.claude/settings.json`：限制 `/model` 菜单的可用模型白名单。
 - `~/.config/systemd/user/claude-model-proxy.service`：守护本地代理进程。
@@ -72,14 +71,11 @@ Claude Code 只暴露可用的本地中转模型选择：
 - `MiniMax-M2.7` -> `routes.minimax`
 - 未知 Claude 内置 id -> fallback `routes.minimax`
 
-## Tyty 开关
+## 网络策略
 
-只保留一个环境变量：`tyty_flag`，兼容大写 `TYTY_FLAG`。
+本地 shim 不再维护 Tyty、HTTP CONNECT、gsettings 或强制清理代理环境等网络策略。
 
-- `tyty_flag=false`：默认。代理启动时清理进程内 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 等环境变量，并直连上游，主动避开 Tyty 的 HTTP 代理环境。
-- `tyty_flag=true`：不做任何转代理、不读 gsettings、不走 HTTP CONNECT。普通网络连接交给 Tyty 虚拟网卡自动接管。
-
-不要在 `api-local.json` 中写 `upstreamProxy`、`directHosts`、`proxyHosts`、`routes.*.proxy`。
+原则：Claude Code 只连本地 `127.0.0.1:3889`，本地 shim 只按 `api-local.json` 普通转发。外网能否访问、是否使用系统代理、VPN 或透明网关，由用户当前 shell/系统网络环境决定。不要在 `api-local.json` 中写 `upstreamProxy`、`directHosts`、`proxyHosts`、`routes.*.proxy`。
 
 ## Shell 环境
 
@@ -146,7 +142,6 @@ Type=simple
 Environment=CLAUDE_PROXY_PORT=3889
 Environment=CLAUDE_PROXY_BIND=127.0.0.1
 Environment=CLAUDE_PROXY_CONFIG=/home/lei/Project1/concatagents/api-local.json
-Environment=tyty_flag=false
 ExecStart=/home/lei/.nvm/versions/node/v22.22.0/bin/node /home/lei/Project1/concatagents/scripts/claude-model-proxy.js
 Restart=on-failure
 RestartSec=3
@@ -171,7 +166,7 @@ systemctl --user restart claude-model-proxy.service
 ```bash
 cd /home/lei/Project1/concatagents
 node --check scripts/claude-model-proxy.js
-node --check scripts/upstream-http.js
+node --check scripts/ping-api-local.js
 bash -n ~/.bashrc
 python3 -m json.tool ~/.claude/settings.json >/dev/null
 ```

@@ -13,7 +13,6 @@
 #          · customRoute（deepseek）的 model / matchModels → routes.deepseek
 #          · 其余（含 /model 槽位 1–4 的 claude-*）→ routes.minimax
 #     └─ 改写 model id、注入 x-api-key，转发到各上游 Anthropic 兼容端点
-#     └─ tyty_flag=false 时清理进程代理环境并直连上游；true 时不接管 Tyty，交给虚拟网卡
 #          │
 #          ▼
 #   上游：api.minimaxi.com/anthropic、api.deepseek.com/anthropic 等
@@ -34,10 +33,6 @@ CLAUDE_MODELS_PY="${REPO_ROOT}/skills/claude-code-models/scripts/claude_models.p
 
 DEFAULT_PORT=3889
 DEFAULT_BIND=127.0.0.1
-
-tyty_flag_value() {
-  echo "${tyty_flag:-${TYTY_FLAG:-false}}"
-}
 
 usage() {
   cat <<'EOF'
@@ -60,7 +55,6 @@ usage() {
   claude-code-proxy.sh status
   claude -p "只回复 hi" --model MiniMax-M2.7
   claude -p "只回复 hi" --model deepseek-v4-pro
-  tyty_flag=true claude-code-proxy.sh install-unit
 
 文档: scripts/claude-code-proxy.md
 EOF
@@ -135,7 +129,6 @@ cmd_status() {
   echo "proxy js:  $PROXY_JS"
   echo "config:    $API_LOCAL"
   echo "listen:    $url"
-  echo "tyty_flag: $(tyty_flag_value)"
   echo
   if systemctl --user is-active claude-model-proxy.service &>/dev/null; then
     echo "systemd:   active (claude-model-proxy.service)"
@@ -158,7 +151,6 @@ cmd_run() {
   export CLAUDE_PROXY_CONFIG="$API_LOCAL"
   echo "前台启动: node $PROXY_JS"
   echo "CLAUDE_PROXY_CONFIG=$CLAUDE_PROXY_CONFIG"
-  echo "tyty_flag=$(tyty_flag_value)"
   exec "$(node_bin)" "$PROXY_JS"
 }
 
@@ -177,7 +169,6 @@ Type=simple
 Environment=CLAUDE_PROXY_PORT=${DEFAULT_PORT}
 Environment=CLAUDE_PROXY_BIND=${DEFAULT_BIND}
 Environment=CLAUDE_PROXY_CONFIG=${API_LOCAL}
-Environment=tyty_flag=$(tyty_flag_value)
 ExecStart=${node} ${PROXY_JS}
 Restart=on-failure
 RestartSec=3
